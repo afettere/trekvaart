@@ -1,0 +1,12 @@
+# Example Machinist command for Trekvaart's sluiswachter.
+# Verify against Machinist's current configuration guide before use; its schema moves.
+
+[commands.sluiswachter]
+executor = "claude"                       # an executor named in the worker's worker.toml
+prompt_file = "prompts/sluiswachter.md"   # relative to a clone of the Trekvaart repository
+timeout = "120m"
+
+# The repair budget is a ceiling the flight may not raise. Set it here, not in the prompt.
+# Machinist passes the rendered prompt on stdin; the value below is read by the prompt text
+# only if you template it in. Keep it small.
+# repair_budget = 2
