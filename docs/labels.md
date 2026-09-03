@@ -18,3 +18,7 @@ A schuit carries exactly one `trekvaart:` label at a time. The sluiswachter is t
 - A flight never merges. `ready-for-review` is its last word.
 - Every stop leaves a comment on the issue stating the reason and the next human action, so the label is never the only record.
 - The repair budget is a small fixed number per flight, set in the runner's config and never raised by the flight itself.
+
+## Runner labels
+
+A runner may add labels of its own between `requested` and `planning`. Machinist swaps `trekvaart:requested` for `machinist:queued` when it admits an issue; the sluiswachter removes that label as it sets `trekvaart:planning`. A runner label is never the flight's record.

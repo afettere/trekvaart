@@ -1,12 +1,35 @@
-# Example Machinist command for Trekvaart's sluiswachter.
-# Verify against Machinist's current configuration guide before use; its schema moves.
+# Machinist control-plane configuration for a Trekvaart pilot.
+# Lives at ~/.machinist/config.toml on the box.
+#
+# Checked against Machinist v0.4.0 (2026-09-03). Machinist's configuration schema broke twice
+# in the week before that date (pipelines became commands; schedules became triggers), so run
+# `machinist worker validate` after any Machinist update and re-read its configuration guide:
+# https://github.com/owainlewis/machinist/blob/main/docs/configuration.md
 
+[server]
+listen = "127.0.0.1:7331"                       # localhost only; reach the UI over an SSH tunnel
+database = "~/.machinist/server/machinist.db"   # Machinist's ledger: jobs, runs, token_usage
+worker_token_file = "~/.machinist/server/worker.token"
+max_concurrent_jobs = 1                         # one flight at a time during a pilot
+
+# The one command: the sluiswachter. Its prompt is read from a clone of this repository, so
+# the prompt is owned here and the runner only renders {{machinist.prompt}} into it.
 [commands.sluiswachter]
-executor = "claude"                       # an executor named in the worker's worker.toml
-prompt_file = "prompts/sluiswachter.md"   # relative to a clone of the Trekvaart repository
+executor = "trekvaart-claude"                   # defined in worker.toml; wraps the agent CLI in the spend sluis
+prompt_file = "/home/machinist/trekvaart/prompts/sluiswachter.md"
 timeout = "120m"
 
-# The repair budget is a ceiling the flight may not raise. Set it here, not in the prompt.
-# Machinist passes the rendered prompt on stdin; the value below is read by the prompt text
-# only if you template it in. Keep it small.
-# repair_budget = 2
+# Logical name -> GitHub slug for every repository the trigger may admit issues from.
+# The logical name must match a [repositories.NAME] entry in worker.toml.
+[github.repositories]
+product = "OWNER/PRODUCT-REPO"
+
+# The trigger. An open issue carrying the label in a registered repository becomes one job.
+# Machinist polls with `gh search issues --label ...` every `every`, checks the actor who
+# applied the label has write access, swaps the request label for `machinist:queued` when it
+# admits the issue, and renders the issue reference into {{machinist.prompt}}.
+[triggers.github.sluiswachter]
+label = "trekvaart:requested"
+every = "2m"
+command = "sluiswachter"
+model = "opus"                                  # an alias from the executor's `models` map

@@ -46,13 +46,18 @@ prompts/
     repair.md            findings in, commits out
 docs/
   labels.md              the lifecycle labels
+sluis/
+  ceiling.json           the pilot's spend ceiling, derived from one constant
+  spend-ceiling.mjs      the spend sluis: refuses a flight once the ceiling is reached
 runners/
-  machinist/             example config for running on Machinist
+  machinist/             config, worker and executor wrapper for running on Machinist
+install/
+  bootstrap.sh           the box: Machinist pinned, this repo cloned, firewall applied
 ```
 
 ## What Trekvaart is not
 
-It is not a runner, a scheduler, a merge queue, or a CI system. It is the prompts and the contract between them. It runs on a job runner that can start one agent process in one repository with a prompt on stdin and a timeout, and record what happened. [Machinist](https://github.com/owainlewis/machinist) is the first runner it is configured for; others that fit the same shape should work.
+It is not a runner, a scheduler, a merge queue, or a CI system. It is the prompts and the contract between them. It runs on a job runner that can start one agent process in one repository with a prompt on stdin and a timeout, and record what happened. [Machinist](https://github.com/owainlewis/machinist) is the first runner it is configured for; others that fit the same shape should work. The box recipe for a pilot is in [install/](install/README.md).
 
 ## Licence
 
