@@ -10,7 +10,7 @@ Sized for a pilot: a 4 vCPU / 8 GB class VM (a Hetzner CX32 or equivalent) runni
 | :-- | :-- | :-- |
 | Your SSH key | you, to reach the VM | root for bootstrap; `machinist` for everything after |
 | `gh auth login` on the box | Machinist's trigger (poll, relabel, permission check) and the sluiswachter (issues, PRs, comments, checks) | an account with write access to the registered repositories |
-| A deploy key created on the box | `git clone`, `fetch`, `push` from the worker | one product repository, write access, pushes restricted to the flight's branch prefix by a branch ruleset |
+| A deploy key created on the box | `git clone`, `fetch`, `push` from the worker | one product repository, write access; the default branch's own protection (pull request plus checks) is what keeps it off `main`, since GitHub cannot scope a deploy key narrower than the repository |
 | The agent CLI's own login | the executor | the subscription or key you choose for the pilot |
 
 Never copy a private key or a credential file onto the box. Create each one there.
@@ -40,7 +40,7 @@ ssh-keygen -t ed25519 -N '' -C "trekvaart@$(hostname)" -f ~/.ssh/id_ed25519_trek
 cat ~/.ssh/id_ed25519_trekvaart.pub
 ```
 
-Add the `.pub` line as a **deploy key with write access** on the product repository (`Settings → Deploy keys`). Then restrict what it may push with a branch ruleset that lets that key create and update only the flight's branch prefix (for example `flight/**`) and nothing else; a deploy key cannot be scoped by GitHub itself. Tell SSH to use it for GitHub:
+Add the `.pub` line as a **deploy key with write access** on the product repository (`Settings → Deploy keys`). A deploy key cannot be scoped narrower than the repository, so check before you add it that the default branch is protected (a pull request and passing checks required, no direct pushes); that protection, not the key, is what keeps a flight off `main`. The sluiswachter itself never merges. Tell SSH to use it for GitHub:
 
 ```sh
 cat >> ~/.ssh/config <<'CFG'

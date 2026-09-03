@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# The executor wrapper Machinist runs instead of the bare agent CLI.
+#
+#   sluis-run <agent command and flags...>
+#
+# 1. Asks the spend sluis whether the ceiling still has room. If not, exits 75 before the
+#    agent starts; Machinist records a failed run and the issue keeps its queued label for a
+#    human to look at.
+# 2. Runs the agent with stdin (the rendered prompt) passed straight through, and tees its
+#    stream through `record`, which appends one priced row to the ledger when the agent exits.
+# The agent's own exit code is the wrapper's exit code.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+sluis="${here}/../../../sluis/spend-ceiling.mjs"
+
+if [[ $# -eq 0 ]]; then
+  echo "sluis-run: no agent command given" >&2
+  exit 64
+fi
+
+model=""
+for arg in "$@"; do
+  case "$arg" in
+    --model=*) model="${arg#--model=}" ;;
+  esac
+done
+if [[ -z "$model" ]]; then
+  echo "sluis-run: the agent command must carry --model=<id> so the run can be priced" >&2
+  exit 64
+fi
+
+run_id="${MACHINIST_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+
+node "$sluis" check
+
+set +e
+"$@" | node "$sluis" record --run-id "$run_id" --model "$model"
+status=("${PIPESTATUS[@]}")
+set -e
+
+if [[ "${status[1]}" -ne 0 ]]; then
+  echo "sluis-run: the ledger row was not written (record exited ${status[1]})" >&2
+  exit "${status[1]}"
+fi
+exit "${status[0]}"

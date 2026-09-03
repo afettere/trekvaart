@@ -1,0 +1,11 @@
+{
+  "ceilingUsd": 60,
+  "flights": 5,
+  "model": "claude-opus-5",
+  "pricesUsdPerMillion": {
+    "claude-opus-5": { "input": 5, "cacheWrite": 6.25, "cacheRead": 0.5, "output": 25 },
+    "claude-sonnet-5": { "input": 2, "cacheWrite": 2.5, "cacheRead": 0.2, "output": 10 }
+  },
+  "priceBasis": "Anthropic published API list prices, read 2026-09-03; cache write 1.25x input, cache read 0.1x input",
+  "ledger": "~/.trekvaart/ledger.jsonl"
+}

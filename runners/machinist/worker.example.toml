@@ -21,6 +21,6 @@ command = [
 models = { opus = "claude-opus-5", sonnet = "claude-sonnet-5" }
 
 # One entry per repository the worker may run in. The name must match [github.repositories]
-# in config.toml. Clone with a deploy key that can push only the branches the flight uses.
+# in config.toml. Clone with a write deploy key; the default branch's protection keeps flights off it.
 [repositories.product]
 path = "/home/machinist/repos/PRODUCT-REPO"

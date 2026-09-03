@@ -1,4 +1,4 @@
-// Spec for the spend sluis. Run: node --test sluis/
+// Spec for the spend sluis. Run: node --test sluis/spend-ceiling.test.mjsspend-ceiling.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
