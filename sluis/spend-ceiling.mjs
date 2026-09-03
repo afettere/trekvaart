@@ -3,7 +3,9 @@
 //
 //   check   exit 0 while recorded spend is below the ceiling, 75 once it is reached.
 //   record  pass the agent's stream from stdin to stdout unchanged, then append one
-//           priced row to the ledger from the stream's final usage event.
+//           priced row to the ledger from the stream's final result event. The event's
+//           modelUsage (one entry per model, subagents included) is priced when present;
+//           its top-level usage covers only the orchestrator's own turns and is the fallback.
 //
 // The ceiling lives in ceiling.json beside this file and is derived from one constant.
 // There is no flag and no environment variable that raises it. A run whose usage cannot
@@ -22,6 +24,12 @@ const STREAM_KEYS = {
   cacheRead: "cache_read_input_tokens",
   output: "output_tokens",
 };
+const MODEL_USAGE_KEYS = {
+  input: "inputTokens",
+  cacheWrite: "cacheCreationInputTokens",
+  cacheRead: "cacheReadInputTokens",
+  output: "outputTokens",
+};
 const EXIT_REFUSED = 75;
 
 function roundCents(usd) {
@@ -34,6 +42,10 @@ function assertCount(name, value) {
 }
 
 export function priceRun(usage, prices) {
+  return roundCents(priceRunExact(usage, prices));
+}
+
+function priceRunExact(usage, prices) {
   if (!usage || typeof usage !== "object") throw new TypeError("usage must be an object");
   if (!prices || typeof prices !== "object") throw new TypeError("prices must be an object");
   let usd = 0;
@@ -44,10 +56,13 @@ export function priceRun(usage, prices) {
     if (typeof rate !== "number" || !(rate >= 0)) throw new TypeError(`prices.${cls} must be a non-negative number`);
     usd += (usage[cls] / 1e6) * rate;
   }
-  return roundCents(usd);
+  return usd;
 }
 
-export function parseUsage(streamText) {
+// Returns { [modelId]: { input, cacheWrite, cacheRead, output } } from the stream's last
+// result event, or null when no usable usage is present. modelUsage wins because it is the
+// only place subagent tokens appear; the top-level usage block is attributed to runModel.
+export function parseUsage(streamText, runModel) {
   if (typeof streamText !== "string") throw new TypeError("stream must be a string");
   let found = null;
   for (const line of streamText.split("\n")) {
@@ -60,21 +75,55 @@ export function parseUsage(streamText) {
       continue;
     }
     if (!event || event.type !== "result") continue;
-    found = usageFromEvent(event);
+    found = usageFromEvent(event, runModel);
   }
   return found;
 }
 
-function usageFromEvent(event) {
-  const raw = event.usage;
+function countsFrom(raw, keys) {
   if (!raw || typeof raw !== "object") return null;
   const usage = {};
   for (const cls of CLASSES) {
-    const value = raw[STREAM_KEYS[cls]];
+    const value = raw[keys[cls]];
     if (typeof value !== "number" || !Number.isInteger(value) || value < 0) return null;
     usage[cls] = value;
   }
   return usage;
+}
+
+function usageFromEvent(event, runModel) {
+  const byModel = event.modelUsage;
+  if (byModel && typeof byModel === "object" && Object.keys(byModel).length > 0) {
+    const out = {};
+    for (const [model, raw] of Object.entries(byModel)) {
+      const usage = countsFrom(raw, MODEL_USAGE_KEYS);
+      if (!usage) return null;
+      out[model] = usage;
+    }
+    return out;
+  }
+  const single = countsFrom(event.usage, STREAM_KEYS);
+  if (!single) return null;
+  if (typeof runModel !== "string" || !runModel) return null;
+  return { [runModel]: single };
+}
+
+// A model id may carry a date suffix (claude-haiku-4-5-20251001); price rows are keyed
+// without it. Throws RangeError when no row matches, so the caller charges the reserve.
+export function priceRowFor(model, prices) {
+  if (prices[model]) return prices[model];
+  const undated = model.replace(/-\d{8}$/, "");
+  if (prices[undated]) return prices[undated];
+  throw new RangeError(`no price row for model ${model}`);
+}
+
+export function priceModelUsage(byModel, prices) {
+  if (!byModel || typeof byModel !== "object") throw new TypeError("byModel must be an object");
+  let usd = 0;
+  for (const [model, usage] of Object.entries(byModel)) {
+    usd += priceRunExact(usage, priceRowFor(model, prices));
+  }
+  return roundCents(usd);
 }
 
 export function loadCeiling(path) {
@@ -210,14 +259,23 @@ async function record(flags) {
     process.stdout.write(line + "\n");
     chunks.push(line);
   }
-  const usage = parseUsage(chunks.join("\n"));
+  const byModel = parseUsage(chunks.join("\n"), model);
+  let usd = null;
+  if (byModel) {
+    try {
+      usd = priceModelUsage(byModel, ceiling.pricesUsdPerMillion);
+    } catch (err) {
+      if (!(err instanceof RangeError)) throw err;
+      process.stderr.write(`spend sluis: ${err.message}; charging the reserve\n`);
+    }
+  }
   const row = {
     recordedAt: new Date().toISOString(),
     runId,
     model,
-    usage,
-    usd: usage ? priceRun(usage, prices) : reserveCharge(ceiling),
-    priced: usage ? "list" : "reserve",
+    usage: byModel,
+    usd: usd ?? reserveCharge(ceiling),
+    priced: usd === null ? "reserve" : "list",
     priceBasis: ceiling.priceBasis,
   };
   appendLedger(ledgerPath, row);
