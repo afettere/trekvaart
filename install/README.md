@@ -29,9 +29,13 @@ bash bootstrap.sh
 
 ```sh
 su - machinist
-gh auth login --hostname github.com --git-protocol ssh --web
-claude                      # sign in once, then exit
+gh auth login --hostname github.com --git-protocol https --web
+claude                      # /login, finish in the browser, then /exit (never Ctrl+Z)
+git config --global user.name "Your Name"
+git config --global user.email "you@example.com"
 ```
+
+The build reach commits as that git identity; without one it invents a repo-local identity from the `gh` account, which a reviewer then has to check. HTTPS for `gh` lets the throwaway repository below clone with the `gh` login alone; the product repository uses the deploy key.
 
 ### Deploy key
 
@@ -62,18 +66,34 @@ Edit `~/.machinist/config.toml` and `~/.machinist/worker.toml` (seeded from [`ru
 ```sh
 machinist worker validate
 exit
+systemctl restart machinist-control-plane.service
 systemctl enable --now machinist-worker.service
 systemctl status machinist-control-plane.service machinist-worker.service
 ```
+
+The control plane reads `config.toml` once at start, so restart it after every edit; `validate` checks the worker file only.
 
 ## Smoke test, before any real issue
 
 Two steps, both against a **throwaway repository** the `gh` account can write to, never the product.
 
-1. **Machinist's own lifecycle eval.** It proves the box, the logins and the trigger with Machinist's shipped `foreman` prompt and `machinist:*` labels. Follow [Machinist's evals README](https://github.com/owainlewis/machinist/blob/main/evals/README.md): clone the throwaway repository, point a copy of Machinist's `examples/config.toml` at it, and run `python3 -m evals.github_labels --repository=... --repo-path=... --machinist=$(command -v machinist)`. It exits non-zero when the label lifecycle is wrong.
-2. **One Trekvaart flight.** Register the throwaway repository in both Machinist files, open an issue there with a one-line acceptance criterion, label it `trekvaart:requested`, and watch `journalctl -u machinist-worker.service -f`. The flight should end on `trekvaart:ready-for-review` with one pull request, and `sluis/ledger.jsonl` should hold one row with four token counts and a dollar figure.
+1. **Create the throwaway repository and its labels** (as `machinist`, so the `gh` login is the one the trigger uses):
 
-Only after both pass do you register the product repository.
+   ```sh
+   mkdir -p ~/repos && cd ~/repos
+   gh repo create trekvaart-evals --private --add-readme --clone
+   cd trekvaart-evals
+   for l in requested planning building verifying ready-for-review needs-human blocked; do gh label create "trekvaart:$l" --color 1F5F6B --force; done
+   gh label create "machinist:queued" --color A87B22 --force
+   ```
+
+   Point both Machinist files at it (`OWNER/trekvaart-evals` and `/home/machinist/repos/trekvaart-evals`), validate, and restart both services.
+
+2. **One Trekvaart flight.** Open an issue there with a one-line acceptance criterion, label it `trekvaart:requested`, and watch `journalctl -u machinist-control-plane.service -u machinist-worker.service -f`. The trigger polls every `every`; the flight should end on `trekvaart:ready-for-review` with one pull request, a stop comment on the issue, and one row in `~/.trekvaart/ledger.jsonl` priced `list`. On 2026-09-03 the first such flight (a one-paragraph CONTRIBUTING.md) took 5 minutes, three fresh subagents, zero repairs, and $1.29 at list.
+
+Machinist's own label-lifecycle eval (`python3 -m evals.github_labels`, in its repository) proves the same trigger with Machinist's `foreman` prompt and `machinist:*` labels; a Trekvaart flight covers it, so it is optional.
+
+Only after the flight passes do you register the product repository.
 
 ## Reaching the UI
 

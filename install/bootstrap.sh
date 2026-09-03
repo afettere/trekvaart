@@ -2,11 +2,16 @@
 # Trekvaart box bootstrap. Run once, as root, on a fresh Ubuntu or Debian VM.
 #
 # What it does, in order:
+#   0. Adds GitHub's apt repository for `gh`: Ubuntu's own package (2.45 on 24.04) predates
+#      the `gh api --slurp` flag Machinist's trigger uses, so the trigger cannot read an issue.
 #   1. Installs Machinist at a pinned release with Machinist's own bootstrap (control plane and
 #      worker as systemd services under the unprivileged `machinist` user).
-#   2. Installs the two extra packages Trekvaart needs: sqlite3 (to read the ledgers) and ufw.
+#   2. Installs what Trekvaart needs beyond that: nodejs (the spend sluis), sqlite3 (to read
+#      the ledgers) and ufw.
 #   3. Clones this repository to /home/machinist/trekvaart at a pinned ref.
-#   4. Seeds ~/.machinist/config.toml and worker.toml from the examples if none exist.
+#   4. Seeds ~/.machinist/config.toml and worker.toml from the examples. Machinist's `init`
+#      writes defaults first; an untouched default is backed up and replaced, an edited file
+#      is left alone.
 #   5. Applies the firewall in install/firewall.sh.
 # It then prints the steps only a human can do: the gh, agent and deploy-key logins.
 #
@@ -23,13 +28,28 @@ if [[ $(id -u) -ne 0 ]]; then
   exit 1
 fi
 
+# Machinist's bootstrap runs the agent installers as the unprivileged user; they try to
+# return to the directory this script was started from, which fails from /root.
+cd /
+
+export DEBIAN_FRONTEND=noninteractive
+
+echo "== 0. GitHub's apt repository for gh"
+mkdir -p -m 755 /etc/apt/keyrings
+curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg
+chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+  > /etc/apt/sources.list.d/github-cli.list
+apt-get update -qq
+
 echo "== 1. Machinist ${MACHINIST_VERSION}"
 curl -fsSL "https://raw.githubusercontent.com/owainlewis/machinist/${MACHINIST_VERSION}/scripts/setup-vm.sh" |
   MACHINIST_VERSION="${MACHINIST_VERSION}" bash
 
-echo "== 2. sqlite3 and ufw"
-export DEBIAN_FRONTEND=noninteractive
-apt-get install -y sqlite3 ufw
+echo "== 2. nodejs, sqlite3, ufw, and gh from GitHub's repository"
+apt-get install -y nodejs sqlite3 ufw gh
+node --version
+gh --version | head -1
 
 RUNTIME_HOME=$(getent passwd "${RUNTIME_USER}" | cut -d: -f6)
 run_as_runtime() { runuser -u "${RUNTIME_USER}" -- env HOME="${RUNTIME_HOME}" "$@"; }
@@ -48,13 +68,17 @@ echo "== 4. Machinist configuration"
 for pair in "config.example.toml:config.toml" "worker.example.toml:worker.toml"; do
   src="${RUNTIME_HOME}/trekvaart/runners/machinist/${pair%%:*}"
   dst="${RUNTIME_HOME}/.machinist/${pair##*:}"
-  if [[ -f "${dst}" ]] && ! grep -q 'trekvaart' "${dst}"; then
-    echo "   ${dst} exists and is not a Trekvaart file; leaving it alone (Machinist's bootstrap wrote a default). Replace it by hand from ${src}."
-  elif [[ ! -f "${dst}" ]]; then
+  if [[ ! -f "${dst}" ]]; then
     run_as_runtime install -m 0600 "${src}" "${dst}"
     echo "   seeded ${dst}"
-  else
+  elif grep -q 'trekvaart' "${dst}"; then
     echo "   ${dst} already a Trekvaart file; kept"
+  elif grep -q -E '^(\[commands\.|\[repositories\.|\[executors\.)' "${dst}" && ! grep -q -E '^\[(commands|repositories)\.[a-z-]+\]$' "${dst}" ; then
+    echo "   ${dst} has been edited by hand; leaving it alone. Replace it yourself from ${src}."
+  else
+    run_as_runtime cp "${dst}" "${dst}.machinist-default"
+    run_as_runtime install -m 0600 "${src}" "${dst}"
+    echo "   replaced Machinist's default ${dst} (backup at ${dst}.machinist-default)"
   fi
 done
 
@@ -65,16 +89,19 @@ cat <<NEXT
 
 Bootstrap complete. Now, as the runtime user (\`su - ${RUNTIME_USER}\`), the steps only you can do:
 
-  1. gh auth login --hostname github.com --git-protocol ssh --web
+  1. gh auth login --hostname github.com --git-protocol https --web
      Use an account with write access to the repositories the trigger will admit issues from.
   2. claude
-     Sign in once, interactively. Then exit.
-  3. Create the deploy key and register it on the product repository (install/README.md, "Deploy key").
-  4. git clone git@github.com:OWNER/PRODUCT-REPO ~/repos/PRODUCT-REPO
-  5. Edit ~/.machinist/config.toml and ~/.machinist/worker.toml: replace OWNER/PRODUCT-REPO and the
+     Sign in once, interactively (/login), then leave with /exit. Never suspend it with Ctrl+Z.
+  3. git config --global user.name "Your Name" && git config --global user.email "you@example.com"
+     The build reach commits as this identity.
+  4. Create the deploy key and register it on the product repository (install/README.md, "Deploy key").
+  5. git clone git@github.com:OWNER/PRODUCT-REPO ~/repos/PRODUCT-REPO
+  6. Edit ~/.machinist/config.toml and ~/.machinist/worker.toml: replace OWNER/PRODUCT-REPO and the
      repository path. Set the spend ceiling's model in ~/trekvaart/sluis/ceiling.json if it is not opus.
-  6. machinist worker validate
-  7. Back as root: systemctl enable --now machinist-worker.service
+  7. machinist worker validate
+  8. Back as root: systemctl restart machinist-control-plane.service && systemctl enable --now machinist-worker.service
+     (the control plane reads config.toml at start, so restart it after any edit)
 
 Then run the smoke test in install/README.md before labelling a real issue.
 NEXT
