@@ -10,6 +10,7 @@ import { spawnSync } from "node:child_process";
 import {
   priceRun,
   parseUsage,
+  priceModelUsage,
   reserveCharge,
   ledgerSpend,
   verdict,
@@ -80,29 +81,30 @@ test("parseUsage reads the four classes from the result event", () => {
   const stream = JSON.stringify({ type: "system", subtype: "init" }) + "\n" +
     JSON.stringify({ type: "assistant", message: {} }) + "\n" +
     resultLine(fullUsage);
-  assert.deepEqual(parseUsage(stream), { input: 1_000_000, cacheWrite: 2_000_000, cacheRead: 10_000_000, output: 100_000 });
+  assert.deepEqual(parseUsage(stream, "claude-opus-5"), { "claude-opus-5": { input: 1_000_000, cacheWrite: 2_000_000, cacheRead: 10_000_000, output: 100_000 } });
 });
 
 test("parseUsage takes the last result event and ignores non-JSON lines", () => {
   const stream = "warming up\n" + resultLine({ ...fullUsage, output_tokens: 1 }) + "not json {\n" + resultLine(fullUsage) + "\n";
-  assert.equal(parseUsage(stream).output, 100_000);
+  assert.equal(parseUsage(stream, "claude-opus-5")["claude-opus-5"].output, 100_000);
 });
 
 test("parseUsage returns null when a class is missing or negative, or there is no result", () => {
   const { output_tokens, ...threeOnly } = fullUsage;
-  assert.equal(parseUsage(resultLine(threeOnly)), null);
-  assert.equal(parseUsage(resultLine({ ...fullUsage, input_tokens: -5 })), null);
-  assert.equal(parseUsage(JSON.stringify({ type: "assistant" }) + "\n"), null);
-  assert.equal(parseUsage(""), null);
+  assert.equal(parseUsage(resultLine(threeOnly), "m"), null);
+  assert.equal(parseUsage(resultLine({ ...fullUsage, input_tokens: -5 }), "m"), null);
+  assert.equal(parseUsage(JSON.stringify({ type: "assistant" }) + "\n", "m"), null);
+  assert.equal(parseUsage("", "m"), null);
 });
 
 // ---- ceiling config
 
-test("the committed ceiling is $60 over five flights on a priced model", () => {
+test("the committed ceiling is $60 over five flights on a priced model, and prices the subagent model too", () => {
   const c = loadCeiling(committedConfig);
   assert.equal(c.ceilingUsd, 60);
   assert.equal(c.flights, 5);
   assert.ok(c.pricesUsdPerMillion[c.model], "the named model has a price row");
+  assert.ok(c.pricesUsdPerMillion["claude-haiku-4-5"], "Claude Code's Explore subagent runs on Haiku 4.5");
   assert.equal(reserveCharge(c), 12);
 });
 
@@ -189,7 +191,7 @@ test("record passes the stream through byte for byte and appends a priced row", 
   assert.equal(rows[0].runId, "run-1");
   assert.equal(rows[0].model, "claude-opus-5");
   assert.equal(rows[0].priced, "list");
-  assert.deepEqual(rows[0].usage, { input: 1_000_000, cacheWrite: 2_000_000, cacheRead: 10_000_000, output: 100_000 });
+  assert.deepEqual(rows[0].usage, { "claude-opus-5": { input: 1_000_000, cacheWrite: 2_000_000, cacheRead: 10_000_000, output: 100_000 } });
   assert.equal(rows[0].usd, 25);
 });
 
@@ -221,4 +223,64 @@ test("a recorded run moves the next check toward refusal", () => {
   }
   const r = run(["check", "--config", cfg, "--ledger", ledger]);
   assert.equal(r.status, 75);
+});
+
+// ---- modelUsage: the result event's top-level usage covers only the orchestrator's own
+// turns; subagents show up only in modelUsage. Measured on the first smoke flight
+// (2026-09-03): usage priced at $0.58, modelUsage at $1.29 for the same run.
+
+const modelUsageEvent = {
+  type: "result",
+  usage: { input_tokens: 26, cache_creation_input_tokens: 26331, cache_read_input_tokens: 355531, output_tokens: 9605 },
+  modelUsage: {
+    "claude-opus-5": { inputTokens: 58, outputTokens: 19737, cacheReadInputTokens: 606441, cacheCreationInputTokens: 78608 },
+    "claude-haiku-4-5-20251001": { inputTokens: 1916, outputTokens: 18, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+  },
+};
+
+test("parseUsage prefers modelUsage and returns one entry per model", () => {
+  const parsed = parseUsage(JSON.stringify(modelUsageEvent) + "\n");
+  assert.deepEqual(parsed, {
+    "claude-opus-5": { input: 58, cacheWrite: 78608, cacheRead: 606441, output: 19737 },
+    "claude-haiku-4-5-20251001": { input: 1916, cacheWrite: 0, cacheRead: 0, output: 18 },
+  });
+});
+
+test("parseUsage falls back to the single usage block under the run's model when modelUsage is absent", () => {
+  const parsed = parseUsage(resultLine(fullUsage), "claude-opus-5");
+  assert.deepEqual(parsed, { "claude-opus-5": { input: 1_000_000, cacheWrite: 2_000_000, cacheRead: 10_000_000, output: 100_000 } });
+});
+
+test("priceModelUsage sums every model at its own row and resolves dated ids to their price row", () => {
+  const c = loadCeiling(committedConfig);
+  const usd = priceModelUsage(parseUsage(JSON.stringify(modelUsageEvent) + "\n"), c.pricesUsdPerMillion);
+  // opus: 58*5 + 78608*6.25 + 606441*0.5 + 19737*25 = 0.00029 + 0.4913 + 0.30322 + 0.49343 = 1.28824
+  // haiku 4.5: 1916*1 + 18*5 = 0.001916 + 0.00009
+  assert.equal(usd, 1.29);
+});
+
+test("priceModelUsage throws on a model with no price row, so the caller can charge the reserve", () => {
+  assert.throws(() => priceModelUsage({ "claude-nothing": { input: 1, cacheWrite: 0, cacheRead: 0, output: 0 } }, opus && loadCeiling(committedConfig).pricesUsdPerMillion), RangeError);
+});
+
+test("record prices a subagent-heavy run from modelUsage, not the orchestrator's usage alone", () => {
+  const dir = tmp();
+  const ledger = join(dir, "ledger.jsonl");
+  const r = run(["record", "--config", writeConfig(dir), "--ledger", ledger, "--run-id", "run-mu", "--model", "claude-opus-5"], { input: JSON.stringify(modelUsageEvent) + "\n" });
+  assert.equal(r.status, 0, r.stderr);
+  const row = JSON.parse(readFileSync(ledger, "utf8").trim());
+  assert.equal(row.priced, "list");
+  assert.equal(row.usd, 1.29);
+  assert.deepEqual(Object.keys(row.usage).sort(), ["claude-haiku-4-5-20251001", "claude-opus-5"]);
+});
+
+test("record charges the reserve when modelUsage names a model the ceiling does not price", () => {
+  const dir = tmp();
+  const ledger = join(dir, "ledger.jsonl");
+  const ev = { type: "result", modelUsage: { "claude-mystery-9": { inputTokens: 5, outputTokens: 5, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 } } };
+  const r = run(["record", "--config", writeConfig(dir), "--ledger", ledger, "--run-id", "run-mu2", "--model", "claude-opus-5"], { input: JSON.stringify(ev) + "\n" });
+  assert.equal(r.status, 0, r.stderr);
+  const row = JSON.parse(readFileSync(ledger, "utf8").trim());
+  assert.equal(row.priced, "reserve");
+  assert.equal(row.usd, 12);
 });
