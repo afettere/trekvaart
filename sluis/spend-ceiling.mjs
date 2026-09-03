@@ -188,7 +188,8 @@ function check(flags) {
     );
     return EXIT_REFUSED;
   }
-  process.stdout.write(`spend sluis: remaining $${v.remainingUsd.toFixed(2)} of $${ceiling.ceilingUsd.toFixed(2)} (ledger ${ledgerPath})\n`);
+  // stderr, so the runner's stdout stays the agent's stream alone
+  process.stderr.write(`spend sluis: remaining $${v.remainingUsd.toFixed(2)} of $${ceiling.ceilingUsd.toFixed(2)} (ledger ${ledgerPath})\n`);
   return 0;
 }
 

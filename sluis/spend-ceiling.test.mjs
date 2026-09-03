@@ -1,4 +1,4 @@
-// Spec for the spend sluis. Run: node --test sluis/spend-ceiling.test.mjsspend-ceiling.test.mjs
+// Spec for the spend sluis. Run: node --test sluis/spend-ceiling.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
@@ -147,7 +147,8 @@ test("check exits 0 with an empty or absent ledger and prints the remaining budg
   const dir = tmp();
   const r = run(["check", "--config", writeConfig(dir), "--ledger", join(dir, "ledger.jsonl")]);
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /remaining \$60\.00 of \$60\.00/);
+  assert.match(r.stderr, /remaining \$60\.00 of \$60\.00/);
+  assert.equal(r.stdout, "");
 });
 
 test("check exits 75 once the ledger reaches the ceiling, and says so", () => {
