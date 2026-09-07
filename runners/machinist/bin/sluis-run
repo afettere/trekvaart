@@ -7,7 +7,8 @@
 #    agent starts; Machinist records a failed run and the issue keeps its queued label for a
 #    human to look at.
 # 2. Runs the agent with stdin (the rendered prompt) passed straight through, and tees its
-#    stream through `record`, which appends one priced row to the ledger when the agent exits.
+#    stream through `record`, which appends a provisional priced row at every result event and
+#    a final row when the agent exits (so a run Machinist kills at its timeout still costs).
 # The agent's own exit code is the wrapper's exit code.
 set -euo pipefail
 

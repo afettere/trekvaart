@@ -17,7 +17,7 @@ max_concurrent_jobs = 1                         # one flight at a time during a 
 [commands.sluiswachter]
 executor = "trekvaart-claude"                   # defined in worker.toml; wraps the agent CLI in the spend sluis
 prompt_file = "/home/machinist/trekvaart/prompts/sluiswachter.md"
-timeout = "120m"
+timeout = "240m"
 
 # Logical name -> GitHub slug for every repository the trigger may admit issues from.
 # The logical name must match a [repositories.NAME] entry in worker.toml.

@@ -13,7 +13,7 @@
 1. A human with write access applies `trekvaart:requested` to an open issue in a registered repository.
 2. Machinist's control plane sees it on its next poll (`every` in the trigger), checks the labelling actor's permission, creates a job, and swaps the label for **`machinist:queued`**. That label is Machinist's, not Trekvaart's; it means "admitted, not yet running" and the sluiswachter replaces it with `trekvaart:planning` as its first act.
 3. The worker leases the job, runs the executor in the repository's checkout with the rendered prompt on stdin, and streams the agent's output. The spend sluis runs first and either refuses (the run fails before the agent starts, and the flight is left for a human) or hands over to the agent.
-4. Machinist records `duration_millis`, `exit_code` and a single `token_usage` total per run. Trekvaart's ledger records the four token classes and the list-price spend beside it.
+4. Machinist records `duration_millis`, `exit_code` and a single `token_usage` total per run. Trekvaart's ledger records the four token classes and the list-price spend beside it: a provisional row at every result event and a final row when the agent exits, so a run Machinist kills at the command's `timeout` still leaves its last cumulative figure. The example timeout is 240 minutes: flight 2 (2026-09-04) reached its verify reach at 120 and was killed there.
 
 ## What Machinist needs on the box
 

@@ -200,13 +200,16 @@ test("record passes the stream through byte for byte and appends a priced row", 
   const r = run(["record", "--config", writeConfig(dir), "--ledger", ledger, "--run-id", "run-1", "--model", "claude-opus-5"], { input: stream });
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout, stream);
-  const rows = readFileSync(ledger, "utf8").trim().split("\n").map((l) => JSON.parse(l));
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].runId, "run-1");
-  assert.equal(rows[0].model, "claude-opus-5");
-  assert.equal(rows[0].priced, "list");
-  assert.deepEqual(rows[0].usage, { "claude-opus-5": { input: 1_000_000, cacheWrite: 2_000_000, cacheRead: 10_000_000, output: 100_000 } });
-  assert.equal(rows[0].usd, 25);
+  const all = rows(ledger);
+  // One provisional row for the result event, one final row at EOF; the final row counts.
+  assert.deepEqual(all.map((row) => row.stage), ["provisional", "final"]);
+  const row = all.at(-1);
+  assert.equal(row.runId, "run-1");
+  assert.equal(row.model, "claude-opus-5");
+  assert.equal(row.priced, "list");
+  assert.deepEqual(row.usage, { "claude-opus-5": { input: 1_000_000, cacheWrite: 2_000_000, cacheRead: 10_000_000, output: 100_000 } });
+  assert.equal(row.usd, 25);
+  assert.equal(ledgerSpend(all), 25);
 });
 
 test("record charges the reserve when the stream carries no usable usage", () => {

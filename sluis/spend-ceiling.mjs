@@ -156,14 +156,20 @@ export function reserveCharge(ceiling) {
   return roundCents(ceiling.ceilingUsd / ceiling.flights);
 }
 
+// Rows for one runId carry cumulative usage (a provisional row per result event, a final
+// row at EOF), so a run's figure is its LAST row, never the sum of its rows. Rows without a
+// runId (hand-recorded, older ledgers) count one each.
 export function ledgerSpend(rows) {
   if (!Array.isArray(rows)) throw new TypeError("rows must be an array");
+  const lastByRun = new Map();
   let total = 0;
   for (const row of rows) {
     if (!row || typeof row.usd !== "number") throw new TypeError("ledger row usd must be a number");
     if (!(row.usd >= 0)) throw new RangeError("ledger row usd must be non-negative");
-    total += row.usd;
+    if (typeof row.runId === "string" && row.runId) lastByRun.set(row.runId, row.usd);
+    else total += row.usd;
   }
+  for (const usd of lastByRun.values()) total += usd;
   return roundCents(total);
 }
 
@@ -252,32 +258,46 @@ async function record(flags) {
   if (!prices) throw new Error(`model ${model} has no price row in the ceiling; refusing to record an unpriced run`);
 
   // Pass every line through as it arrives so the runner's own collector sees the live
-  // stream; keep the text to read the final usage event once the agent has exited.
-  const chunks = [];
-  const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
-  for await (const line of rl) {
-    process.stdout.write(line + "\n");
-    chunks.push(line);
-  }
-  const byModel = parseUsage(chunks.join("\n"), model);
-  let usd = null;
-  if (byModel) {
+  // Stream the agent's output through unchanged. Every result event carries the session's
+  // cumulative usage, so price each one as it passes and append a provisional row: a run the
+  // runner kills at its timeout never reaches EOF, and a ledger written only at EOF charged
+  // flight 2's 120 minutes at $0. The final row at EOF supersedes the provisional ones
+  // (ledgerSpend counts the last row per runId).
+  const priceOrReserve = (byModel) => {
+    if (!byModel) return null;
     try {
-      usd = priceModelUsage(byModel, ceiling.pricesUsdPerMillion);
+      return priceModelUsage(byModel, ceiling.pricesUsdPerMillion);
     } catch (err) {
       if (!(err instanceof RangeError)) throw err;
       process.stderr.write(`spend sluis: ${err.message}; charging the reserve\n`);
+      return null;
     }
-  }
-  const row = {
-    recordedAt: new Date().toISOString(),
-    runId,
-    model,
-    usage: byModel,
-    usd: usd ?? reserveCharge(ceiling),
-    priced: usd === null ? "reserve" : "list",
-    priceBasis: ceiling.priceBasis,
   };
+  const rowFor = (stage, byModel) => {
+    const usd = priceOrReserve(byModel);
+    return {
+      recordedAt: new Date().toISOString(),
+      runId,
+      model,
+      stage,
+      usage: byModel,
+      usd: usd ?? reserveCharge(ceiling),
+      priced: usd === null ? "reserve" : "list",
+      priceBasis: ceiling.priceBasis,
+    };
+  };
+  let lastUsage = null;
+  const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
+  for await (const line of rl) {
+    process.stdout.write(line + "\n");
+    const byModel = parseUsage(line, model);
+    if (!byModel) continue;
+    lastUsage = byModel;
+    const row = rowFor("provisional", byModel);
+    appendLedger(ledgerPath, row);
+    process.stderr.write(`spend sluis: provisional ${runId} at $${row.usd.toFixed(2)} (${row.priced})\n`);
+  }
+  const row = rowFor("final", lastUsage);
   appendLedger(ledgerPath, row);
   process.stderr.write(`spend sluis: recorded ${runId} at $${row.usd.toFixed(2)} (${row.priced})\n`);
   return 0;
