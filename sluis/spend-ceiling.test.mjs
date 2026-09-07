@@ -5,7 +5,8 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawnSync } from "node:child_process";
+import { spawnSync, spawn } from "node:child_process";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import {
   priceRun,
@@ -38,6 +39,12 @@ function run(args, { input, env } = {}) {
     env: { ...process.env, ...env },
     encoding: "utf8",
   });
+}
+function rows(ledger) {
+  return readFileSync(ledger, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+}
+function lastRow(ledger) {
+  return rows(ledger).at(-1);
 }
 function resultLine(usage) {
   return JSON.stringify({ type: "result", subtype: "success", usage }) + "\n";
@@ -137,6 +144,13 @@ test("ledgerSpend sums the dollar column and refuses a corrupt row", () => {
   assert.throws(() => ledgerSpend([{ usd: -1 }]), RangeError);
 });
 
+test("ledgerSpend counts the last row per runId, so a provisional row is superseded by the final one", () => {
+  // Rows for one run carry cumulative usage: the last one is the run's figure, not the sum.
+  assert.equal(ledgerSpend([{ runId: "a", usd: 5 }, { runId: "a", usd: 9 }, { runId: "b", usd: 1 }]), 10);
+  // Rows without a runId (hand-recorded, pre-0.3 ledgers) still count one each.
+  assert.equal(ledgerSpend([{ usd: 2 }, { usd: 3 }, { runId: "a", usd: 4 }, { runId: "a", usd: 1 }]), 6);
+});
+
 test("verdict allows below the ceiling and refuses at or above it", () => {
   assert.deepEqual(verdict({ spentUsd: 59.99, ceilingUsd: 60 }), { allowed: true, remainingUsd: 0.01 });
   assert.deepEqual(verdict({ spentUsd: 60, ceilingUsd: 60 }), { allowed: false, remainingUsd: 0 });
@@ -200,7 +214,7 @@ test("record charges the reserve when the stream carries no usable usage", () =>
   const ledger = join(dir, "ledger.jsonl");
   const r = run(["record", "--config", writeConfig(dir), "--ledger", ledger, "--run-id", "run-2", "--model", "claude-opus-5"], { input: "the agent crashed\n" });
   assert.equal(r.status, 0, r.stderr);
-  const row = JSON.parse(readFileSync(ledger, "utf8").trim());
+  const row = lastRow(ledger);
   assert.equal(row.priced, "reserve");
   assert.equal(row.usd, 12);
   assert.equal(row.usage, null);
@@ -268,7 +282,7 @@ test("record prices a subagent-heavy run from modelUsage, not the orchestrator's
   const ledger = join(dir, "ledger.jsonl");
   const r = run(["record", "--config", writeConfig(dir), "--ledger", ledger, "--run-id", "run-mu", "--model", "claude-opus-5"], { input: JSON.stringify(modelUsageEvent) + "\n" });
   assert.equal(r.status, 0, r.stderr);
-  const row = JSON.parse(readFileSync(ledger, "utf8").trim());
+  const row = lastRow(ledger);
   assert.equal(row.priced, "list");
   assert.equal(row.usd, 1.29);
   assert.deepEqual(Object.keys(row.usage).sort(), ["claude-haiku-4-5-20251001", "claude-opus-5"]);
@@ -280,7 +294,52 @@ test("record charges the reserve when modelUsage names a model the ceiling does 
   const ev = { type: "result", modelUsage: { "claude-mystery-9": { inputTokens: 5, outputTokens: 5, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 } } };
   const r = run(["record", "--config", writeConfig(dir), "--ledger", ledger, "--run-id", "run-mu2", "--model", "claude-opus-5"], { input: JSON.stringify(ev) + "\n" });
   assert.equal(r.status, 0, r.stderr);
-  const row = JSON.parse(readFileSync(ledger, "utf8").trim());
+  const row = lastRow(ledger);
   assert.equal(row.priced, "reserve");
   assert.equal(row.usd, 12);
+});
+
+// ---- provisional rows: a run the runner kills at its timeout never reaches EOF, so a
+// record that waits for EOF writes nothing. Measured on flight 2 (2026-09-04): 120 minutes
+// of spend, no row. Each result event carries the session's cumulative usage, so the last
+// provisional row is the run's figure and the final row supersedes it.
+
+test("record appends a provisional row at each result event, so a killed run still leaves its last cumulative figure", async () => {
+  const dir = tmp();
+  const ledger = join(dir, "ledger.jsonl");
+  const child = spawn(process.execPath, [cli, "record", "--config", writeConfig(dir), "--ledger", ledger, "--run-id", "run-killed", "--model", "claude-opus-5"], { stdio: ["pipe", "pipe", "pipe"] });
+  child.stdout.resume();
+  child.stderr.resume();
+  child.stdin.write(resultLine(fullUsage));
+  for (let i = 0; i < 50 && !existsSync(ledger); i++) await sleep(100);
+  child.kill("SIGKILL");
+  await new Promise((resolve) => child.on("exit", resolve));
+  const all = rows(ledger);
+  assert.equal(all.length, 1);
+  assert.equal(all[0].runId, "run-killed");
+  assert.equal(all[0].stage, "provisional");
+  assert.equal(all[0].priced, "list");
+  assert.equal(all[0].usd, 25);
+});
+
+test("record writes one provisional row per result event and a final row at EOF, and the final row is what the ledger counts", () => {
+  const dir = tmp();
+  const ledger = join(dir, "ledger.jsonl");
+  const half = { input_tokens: 500_000, cache_creation_input_tokens: 1_000_000, cache_read_input_tokens: 5_000_000, output_tokens: 50_000 };
+  const stream = resultLine(half) + '{"type":"assistant"}\n' + resultLine(fullUsage);
+  const r = run(["record", "--config", writeConfig(dir), "--ledger", ledger, "--run-id", "run-full", "--model", "claude-opus-5"], { input: stream });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, stream);
+  const all = rows(ledger);
+  assert.deepEqual(all.map((row) => [row.stage, row.usd]), [["provisional", 12.5], ["provisional", 25], ["final", 25]]);
+  assert.ok(all.every((row) => row.runId === "run-full"));
+  assert.equal(ledgerSpend(all), 25);
+});
+
+test("record writes only a final reserve row when the stream carries no result event", () => {
+  const dir = tmp();
+  const ledger = join(dir, "ledger.jsonl");
+  const r = run(["record", "--config", writeConfig(dir), "--ledger", ledger, "--run-id", "run-silent", "--model", "claude-opus-5"], { input: "no usage\n" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(rows(ledger).map((row) => [row.stage, row.priced, row.usd]), [["final", "reserve", 12]]);
 });
