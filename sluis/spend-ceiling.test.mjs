@@ -106,13 +106,26 @@ test("parseUsage returns null when a class is missing or negative, or there is n
 
 // ---- ceiling config
 
-test("the committed ceiling is $60 over five flights on a priced model, and prices the subagent model too", () => {
+test("the committed ceiling is $250 per rolling 30 days over fifteen flights on a priced model, and prices the subagent model too", () => {
   const c = loadCeiling(committedConfig);
-  assert.equal(c.ceilingUsd, 60);
-  assert.equal(c.flights, 5);
+  assert.equal(c.ceilingUsd, 250);
+  assert.equal(c.windowDays, 30);
+  assert.equal(c.flights, 15);
   assert.ok(c.pricesUsdPerMillion[c.model], "the named model has a price row");
   assert.ok(c.pricesUsdPerMillion["claude-haiku-4-5"], "Claude Code's Explore subagent runs on Haiku 4.5");
-  assert.equal(reserveCharge(c), 12);
+  assert.equal(reserveCharge(c), 16.67);
+});
+
+test("loadCeiling refuses a missing or non-integer window", () => {
+  const dir = tmp();
+  assert.throws(() => loadCeiling(writeConfig(dir, { windowDays: 0 })), RangeError);
+  assert.throws(() => loadCeiling(writeConfig(dir, { windowDays: 2.5 })), RangeError);
+  assert.throws(() => loadCeiling(writeConfig(dir, { windowDays: "30" })), TypeError);
+  const base = JSON.parse(readFileSync(committedConfig, "utf8"));
+  delete base.windowDays;
+  const p = join(dir, "no-window.json");
+  writeFileSync(p, JSON.stringify(base));
+  assert.throws(() => loadCeiling(p), TypeError);
 });
 
 test("loadCeiling refuses a non-positive ceiling, a non-integer flight count, or an unpriced model", () => {
@@ -151,6 +164,44 @@ test("ledgerSpend counts the last row per runId, so a provisional row is superse
   assert.equal(ledgerSpend([{ usd: 2 }, { usd: 3 }, { runId: "a", usd: 4 }, { runId: "a", usd: 1 }]), 6);
 });
 
+test("ledgerSpend counts only runs whose last row is inside the rolling window", () => {
+  const now = new Date("2026-10-08T12:00:00Z");
+  const days = (d) => new Date(now.getTime() - d * 86_400_000).toISOString();
+  const rows = [
+    { runId: "old", recordedAt: days(31), usd: 40 },
+    { runId: "edge", recordedAt: days(29), usd: 7 },
+    { runId: "new", recordedAt: days(1), usd: 5 },
+  ];
+  assert.equal(ledgerSpend(rows, { now, windowDays: 30 }), 12);
+  assert.equal(ledgerSpend(rows), 52, "no window means the whole ledger, as before");
+});
+
+test("a run's provisional rows may predate the window; its last row decides", () => {
+  const now = new Date("2026-10-08T12:00:00Z");
+  const days = (d) => new Date(now.getTime() - d * 86_400_000).toISOString();
+  const rows = [
+    { runId: "a", stage: "provisional", recordedAt: days(31), usd: 3 },
+    { runId: "a", stage: "final", recordedAt: days(29.9), usd: 9 },
+    { runId: "b", stage: "provisional", recordedAt: days(29), usd: 2 },
+    { runId: "b", stage: "final", recordedAt: days(31), usd: 6 },
+  ];
+  // "a" ends inside the window and counts at its final figure; "b" has a final row dated
+  // before its provisional one, which cannot happen on a real ledger, so it is refused.
+  assert.equal(ledgerSpend(rows.slice(0, 2), { now, windowDays: 30 }), 9);
+  assert.throws(() => ledgerSpend(rows, { now, windowDays: 30 }), RangeError);
+});
+
+test("a row with no recordedAt counts inside any window: an undated dollar is not a free one", () => {
+  const now = new Date("2026-10-08T12:00:00Z");
+  assert.equal(ledgerSpend([{ usd: 4 }, { runId: "x", usd: 6 }], { now, windowDays: 30 }), 10);
+});
+
+test("ledgerSpend refuses a window it cannot apply", () => {
+  assert.throws(() => ledgerSpend([], { now: "today", windowDays: 30 }), TypeError);
+  assert.throws(() => ledgerSpend([], { now: new Date(), windowDays: 0 }), RangeError);
+  assert.throws(() => ledgerSpend([{ runId: "x", recordedAt: "yesterday", usd: 1 }], { now: new Date(), windowDays: 30 }), RangeError);
+});
+
 test("verdict allows below the ceiling and refuses at or above it", () => {
   assert.deepEqual(verdict({ spentUsd: 59.99, ceilingUsd: 60 }), { allowed: true, remainingUsd: 0.01 });
   assert.deepEqual(verdict({ spentUsd: 60, ceilingUsd: 60 }), { allowed: false, remainingUsd: 0 });
@@ -163,14 +214,14 @@ test("check exits 0 with an empty or absent ledger and prints the remaining budg
   const dir = tmp();
   const r = run(["check", "--config", writeConfig(dir), "--ledger", join(dir, "ledger.jsonl")]);
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stderr, /remaining \$60\.00 of \$60\.00/);
+  assert.match(r.stderr, /remaining \$250\.00 of \$250\.00/);
   assert.equal(r.stdout, "");
 });
 
 test("check exits 75 once the ledger reaches the ceiling, and says so", () => {
   const dir = tmp();
   const ledger = join(dir, "ledger.jsonl");
-  writeFileSync(ledger, [{ usd: 30 }, { usd: 30 }].map((r) => JSON.stringify(r)).join("\n") + "\n");
+  writeFileSync(ledger, [{ usd: 125 }, { usd: 125 }].map((r) => JSON.stringify(r)).join("\n") + "\n");
   const r = run(["check", "--config", writeConfig(dir), "--ledger", ledger]);
   assert.equal(r.status, 75);
   assert.match(r.stderr, /ceiling reached/);
@@ -219,7 +270,7 @@ test("record charges the reserve when the stream carries no usable usage", () =>
   assert.equal(r.status, 0, r.stderr);
   const row = lastRow(ledger);
   assert.equal(row.priced, "reserve");
-  assert.equal(row.usd, 12);
+  assert.equal(row.usd, 16.67);
   assert.equal(row.usage, null);
 });
 
@@ -299,7 +350,7 @@ test("record charges the reserve when modelUsage names a model the ceiling does 
   assert.equal(r.status, 0, r.stderr);
   const row = lastRow(ledger);
   assert.equal(row.priced, "reserve");
-  assert.equal(row.usd, 12);
+  assert.equal(row.usd, 16.67);
 });
 
 // ---- provisional rows: a run the runner kills at its timeout never reaches EOF, so a
@@ -344,5 +395,5 @@ test("record writes only a final reserve row when the stream carries no result e
   const ledger = join(dir, "ledger.jsonl");
   const r = run(["record", "--config", writeConfig(dir), "--ledger", ledger, "--run-id", "run-silent", "--model", "claude-opus-5"], { input: "no usage\n" });
   assert.equal(r.status, 0, r.stderr);
-  assert.deepEqual(rows(ledger).map((row) => [row.stage, row.priced, row.usd]), [["final", "reserve", 12]]);
+  assert.deepEqual(rows(ledger).map((row) => [row.stage, row.priced, row.usd]), [["final", "reserve", 16.67]]);
 });
