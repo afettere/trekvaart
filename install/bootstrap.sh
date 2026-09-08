@@ -6,7 +6,7 @@
 #      the `gh api --slurp` flag Machinist's trigger uses, so the trigger cannot read an issue.
 #   1. Installs Machinist at a pinned release with Machinist's own bootstrap (control plane and
 #      worker as systemd services under the unprivileged `machinist` user).
-#   2. Installs what Trekvaart needs beyond that: nodejs (the spend sluis), sqlite3 (to read
+#   2. Installs what Trekvaart needs beyond that: nodejs (the spend sluis and the sweeper), sqlite3 (to read
 #      the ledgers) and ufw.
 #   3. Clones this repository to /home/machinist/trekvaart at a pinned ref.
 #   4. Seeds ~/.machinist/config.toml and worker.toml from the examples. Machinist's `init`
@@ -82,7 +82,16 @@ for pair in "config.example.toml:config.toml" "worker.example.toml:worker.toml";
   fi
 done
 
-echo "== 5. Firewall"
+echo "== 5. herdr, for the sessions a human runs on the box by hand"
+# A persistent terminal runtime (Apache 2.0): a Claude Code session opened in a herdr pane
+# survives an SSH drop or a laptop sleep. Not in the flight path; Machinist runs flights.
+# Installed as the runtime user so its server runs under the same account as the agent login.
+if ! run_as_runtime bash -lc 'command -v herdr' >/dev/null 2>&1; then
+  run_as_runtime bash -lc 'curl -fsSL https://herdr.dev/install.sh | sh'
+fi
+run_as_runtime bash -lc 'herdr --version' || echo "   herdr did not install; the box works without it (see install/README.md, herdr)"
+
+echo "== 6. Firewall"
 bash "${RUNTIME_HOME}/trekvaart/install/firewall.sh"
 
 cat <<NEXT

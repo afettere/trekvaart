@@ -1,23 +1,31 @@
-# Machinist control-plane configuration for a Trekvaart pilot.
+# Machinist control-plane configuration for Trekvaart.
 # Lives at ~/.machinist/config.toml on the box.
 #
-# Checked against Machinist v0.4.0 (2026-09-03). Machinist's configuration schema broke twice
-# in the week before that date (pipelines became commands; schedules became triggers), so run
-# `machinist worker validate` after any Machinist update and re-read its configuration guide:
+# Checked against Machinist v0.4.0 and its tip b387fc7 (2026-09-08). Machinist's configuration
+# schema broke twice in the week before v0.4.0 (pipelines became commands; schedules became
+# triggers) and once on main since (Shepherd schedules removed in favour of triggers, which
+# Trekvaart does not use). Install release tags only; run `machinist worker validate` after any
+# update and re-read its configuration guide:
 # https://github.com/owainlewis/machinist/blob/main/docs/configuration.md
 
 [server]
 listen = "127.0.0.1:7331"                       # localhost only; reach the UI over an SSH tunnel
 database = "~/.machinist/server/machinist.db"   # Machinist's ledger: jobs, runs, token_usage
 worker_token_file = "~/.machinist/server/worker.token"
-max_concurrent_jobs = 1                         # one flight at a time during a pilot
+max_concurrent_jobs = 1                         # one flight at a time until the sweeper has handled a real kill
 
-# The one command: the sluiswachter. Its prompt is read from a clone of this repository, so
-# the prompt is owned here and the runner only renders {{machinist.prompt}} into it.
-[commands.sluiswachter]
+# The flight: the foreman. Its prompt is read from a clone of this repository, so the prompt is
+# owned here and the runner only renders {{machinist.prompt}} into it.
+[commands.foreman]
 executor = "trekvaart-claude"                   # defined in worker.toml; wraps the agent CLI in the spend sluis
-prompt_file = "/home/machinist/trekvaart/prompts/sluiswachter.md"
+prompt_file = "/home/machinist/trekvaart/prompts/foreman.md"
 timeout = "240m"
+
+# The stranded-flight sweeper: a script, not an agent. Runs in the product checkout so it can
+# read the repository from the remote; moves an in-flight issue with no live run to needs-human.
+[commands.sweep]
+executor = "trekvaart-sweep"
+timeout = "5m"
 
 # Logical name -> GitHub slug for every repository the trigger may admit issues from.
 # The logical name must match a [repositories.NAME] entry in worker.toml.
@@ -28,8 +36,17 @@ product = "OWNER/PRODUCT-REPO"
 # Machinist polls with `gh search issues --label ...` every `every`, checks the actor who
 # applied the label has write access, swaps the request label for `machinist:queued` when it
 # admits the issue, and renders the issue reference into {{machinist.prompt}}.
-[triggers.github.sluiswachter]
+[triggers.github.foreman]
 label = "trekvaart:requested"
 every = "2m"
-command = "sluiswachter"
+command = "foreman"
 model = "opus"                                  # an alias from the executor's `models` map
+
+# The sweeper's tick. Every fifteen minutes; the sweeper itself waits a grace period after a
+# label change, so this cadence cannot race a run that is starting.
+[triggers.cron.sweep-product]
+schedule = "*/15 * * * *"
+timezone = "UTC"
+repository = "product"
+command = "sweep"
+prompt = "Sweep stranded flights."

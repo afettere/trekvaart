@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# The stranded-flight sweeper as a Machinist command. Machinist runs it in a registered
+# repository's checkout on a cron trigger, with a prompt on stdin it does not need.
+#
+#   sweep-stranded            # repository read from the checkout's origin
+#
+# Moves every issue that carries planning, building or verifying with no live run behind it to
+# needs-human, with a stop comment. See sluis/stranded.mjs.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+stranded="${here}/../../../sluis/stranded.mjs"
+
+cat > /dev/null   # the rendered prompt; nothing here reads it
+
+origin="$(git remote get-url origin 2>/dev/null || true)"
+if [[ -z "$origin" ]]; then
+  echo "sweep-stranded: not inside a git checkout with an origin remote" >&2
+  exit 64
+fi
+# git@github.com:OWNER/REPO.git or https://github.com/OWNER/REPO(.git)
+slug="$(printf '%s' "$origin" | sed -E 's#^(git@github\.com:|https://github\.com/)##; s#\.git$##')"
+if [[ ! "$slug" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+  echo "sweep-stranded: could not read OWNER/REPO from origin ${origin}" >&2
+  exit 64
+fi
+
+exec node "$stranded" sweep --repo "$slug" "$@"
