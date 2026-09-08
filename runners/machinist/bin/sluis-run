@@ -6,14 +6,27 @@
 # 1. Asks the spend sluis whether the ceiling still has room. If not, exits 75 before the
 #    agent starts; Machinist records a failed run and the issue keeps its queued label for a
 #    human to look at.
-# 2. Runs the agent with stdin (the rendered prompt) passed straight through, and tees its
-#    stream through `record`, which appends a provisional priced row at every result event and
-#    a final row when the agent exits (so a run Machinist kills at its timeout still costs).
+# 2. Turns the agent CLI's own background-task ceiling off. In --print mode the CLI ends
+#    background subagents 600 s after the orchestrator's turn ends and exits; flight 3 died
+#    there, ten minutes into a build reach. Machinist's `timeout` is the only wall clock.
+# 3. Reads the issue the runner rendered into the prompt and leaves a marker for the
+#    stranded-flight sweeper while the agent runs (a kill takes this whole process group,
+#    marker cleanup included, which is exactly what the sweeper looks for).
+# 4. Runs the agent with the prompt on stdin and tees its stream through `record`, which
+#    appends a provisional priced row at every result event and a final row at exit.
+# 5. On the agent's own exit, repairs a stranded label: if the issue still carries planning,
+#    building or verifying, it moves to needs-human with a stop comment naming the exit.
 # The agent's own exit code is the wrapper's exit code.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 sluis="${here}/../../../sluis/spend-ceiling.mjs"
+stranded="${here}/../../../sluis/stranded.mjs"
+
+# Test seams only: the committed ceiling and the default marker directory are what a box uses.
+ceiling_args=()
+if [[ -n "${TREKVAART_CEILING:-}" ]]; then ceiling_args=(--config "${TREKVAART_CEILING}"); fi
+active_dir="${TREKVAART_ACTIVE_DIR:-${HOME}/.trekvaart/active}"
 
 if [[ $# -eq 0 ]]; then
   echo "sluis-run: no agent command given" >&2
@@ -33,15 +46,51 @@ fi
 
 run_id="${MACHINIST_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
 
-node "$sluis" check
+node "$sluis" check "${ceiling_args[@]}"
+
+# The CLI's background-task ceiling, off (see 2 above).
+export CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0
+
+# The prompt arrives on stdin and is passed to the agent unchanged; a copy is read for the
+# issue URL Machinist renders ("Complete https://github.com/OWNER/REPO/issues/N").
+prompt_file="$(mktemp)"
+cat > "$prompt_file"
+issue_url="$(grep -oE 'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[0-9]+' "$prompt_file" | head -n 1 || true)"
+issue_number=""
+if [[ -n "$issue_url" ]]; then issue_number="${issue_url##*/}"; fi
+
+marker=""
+if [[ -n "$issue_number" ]]; then
+  mkdir -p "$active_dir"
+  marker="${active_dir}/${issue_number}.json"
+  printf '{"issue":%s,"pid":%s,"runId":"%s","startedAt":"%s","url":"%s"}\n' \
+    "$issue_number" "$$" "$run_id" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$issue_url" > "$marker"
+fi
+
+cleanup() {
+  rm -f "$prompt_file"
+  if [[ -n "$marker" ]]; then rm -f "$marker"; fi
+}
+trap cleanup EXIT
 
 set +e
-"$@" | node "$sluis" record --run-id "$run_id" --model "$model"
+"$@" < "$prompt_file" | node "$sluis" record --run-id "$run_id" --model "$model" "${ceiling_args[@]}"
 status=("${PIPESTATUS[@]}")
 set -e
 
-if [[ "${status[1]}" -ne 0 ]]; then
-  echo "sluis-run: the ledger row was not written (record exited ${status[1]})" >&2
-  exit "${status[1]}"
+agent_status="${status[0]}"
+record_status="${status[1]}"
+
+# The agent has exited on its own (a kill never reaches this line). If the issue is still
+# in flight, the flight ended without posting: make that visible.
+if [[ -n "$issue_url" ]]; then
+  if ! node "$stranded" repair --issue "$issue_url" --exit "$agent_status" --run-id "$run_id"; then
+    echo "sluis-run: the stranded-label repair failed; the sweeper will retry on its next tick" >&2
+  fi
 fi
-exit "${status[0]}"
+
+if [[ "$record_status" -ne 0 ]]; then
+  echo "sluis-run: the ledger row was not written (record exited ${record_status})" >&2
+  exit "$record_status"
+fi
+exit "$agent_status"

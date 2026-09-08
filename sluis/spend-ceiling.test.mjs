@@ -282,11 +282,12 @@ test("record refuses a model the ceiling does not price, without writing a row",
   assert.equal(existsSync(ledger), false);
 });
 
-test("a recorded run moves the next check toward refusal", () => {
+test("a recorded run moves the next check toward refusal: `flights` unreadable runs exhaust the ceiling", () => {
   const dir = tmp();
   const ledger = join(dir, "ledger.jsonl");
   const cfg = writeConfig(dir);
-  for (let i = 0; i < 5; i++) {
+  const { flights } = loadCeiling(cfg);
+  for (let i = 0; i < flights; i++) {
     run(["record", "--config", cfg, "--ledger", ledger, "--run-id", `r${i}`, "--model", "claude-opus-5"], { input: "no usage\n" });
   }
   const r = run(["check", "--config", cfg, "--ledger", ledger]);

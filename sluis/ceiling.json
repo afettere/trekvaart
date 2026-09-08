@@ -1,6 +1,7 @@
 {
-  "ceilingUsd": 60,
-  "flights": 5,
+  "ceilingUsd": 250,
+  "windowDays": 30,
+  "flights": 15,
   "model": "claude-opus-5",
   "pricesUsdPerMillion": {
     "claude-opus-5": { "input": 5, "cacheWrite": 6.25, "cacheRead": 0.5, "output": 25 },

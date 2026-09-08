@@ -79,7 +79,8 @@ test("strandedFlights refuses malformed input rather than sweeping on it", () =>
   assert.throws(() => strandedFlights({ issues: "nope", active: [], now }), TypeError);
   assert.throws(() => strandedFlights({ issues: [], active: null, now }), TypeError);
   assert.throws(() => strandedFlights({ issues: [], active: [], now: "today" }), TypeError);
-  assert.throws(() => strandedFlights({ issues: [{ number: 1, labels: [] }], active: [], now }), TypeError);
+  assert.throws(() => strandedFlights({ issues: [{ number: 1 }], active: [], now }), TypeError);
+  assert.throws(() => strandedFlights({ issues: [{ number: 0, labels: [] }], active: [], now }), TypeError);
 });
 
 // ---- helpers shared with the wrapper
@@ -197,7 +198,8 @@ test("repair swaps the label and comments when the agent exits with the issue in
   assert.equal(r.status, 0, r.stderr);
   const calls = gh.log();
   assert.ok(calls.some((c) => /issue edit 8138 .*--remove-label trekvaart:building.*--add-label trekvaart:needs-human/.test(c)), calls.join("\n"));
-  assert.ok(calls.some((c) => /issue comment 8138 .*137/.test(c)), calls.join("\n"));
+  assert.ok(calls.some((c) => /^issue comment 8138 /.test(c)), calls.join("\n"));
+  assert.match(calls.join("\n"), /exited 137/);
 
   const quiet = fakeGh(mkdtempSync(join(tmpdir(), "stranded-")), { viewLabels: ["trekvaart:ready-for-review"] });
   const r2 = runCli(["repair", "--issue", "https://github.com/o/r/issues/8138", "--exit", "0", "--run-id", "run_k"], { bin: quiet.bin });

@@ -110,7 +110,9 @@ test("an agent that exits with the issue still in flight gets its label repaired
   assert.equal(r.status, 3, "the agent's exit code is the wrapper's");
   const calls = f.ghCalls();
   assert.ok(calls.some((c) => /issue edit 8138 .*--remove-label trekvaart:building.*--add-label trekvaart:needs-human/.test(c)), calls.join("\n"));
-  assert.ok(calls.some((c) => /issue comment 8138 .*run_exit3/.test(c)), calls.join("\n"));
+  assert.ok(calls.some((c) => /^issue comment 8138 /.test(c)), calls.join("\n"));
+  assert.match(calls.join("\n"), /run_exit3/);
+  assert.match(calls.join("\n"), /exited 3/);
 });
 
 test("an agent that ends on a terminal label leaves the issue alone", () => {

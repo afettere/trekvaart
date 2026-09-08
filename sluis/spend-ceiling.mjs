@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The spend sluis: a refusing cap on what a pilot may spend on model calls.
+// The spend sluis: a refusing cap on what the box may spend on model calls per rolling window.
 //
 //   check   exit 0 while recorded spend is below the ceiling, 75 once it is reached.
 //   record  pass the agent's stream from stdin to stdout unchanged, then append one
@@ -7,7 +7,8 @@
 //           modelUsage (one entry per model, subagents included) is priced when present;
 //           its top-level usage covers only the orchestrator's own turns and is the fallback.
 //
-// The ceiling lives in ceiling.json beside this file and is derived from one constant.
+// The ceiling lives in ceiling.json beside this file: one constant per rolling window of
+// windowDays, and the number of flights it is meant to cover.
 // There is no flag and no environment variable that raises it. A run whose usage cannot
 // be read is charged one flight's share of the ceiling, so a broken reading spends budget
 // visibly rather than hiding it.
@@ -130,6 +131,8 @@ export function loadCeiling(path) {
   const parsed = JSON.parse(readFileSync(path, "utf8"));
   if (typeof parsed.ceilingUsd !== "number") throw new TypeError("ceilingUsd must be a number");
   if (!(parsed.ceilingUsd > 0)) throw new RangeError("ceilingUsd must be positive");
+  if (typeof parsed.windowDays !== "number") throw new TypeError("windowDays must be a number: the ceiling is per rolling window");
+  if (!Number.isInteger(parsed.windowDays) || parsed.windowDays < 1) throw new RangeError("windowDays must be a positive integer");
   if (typeof parsed.flights !== "number") throw new TypeError("flights must be a number");
   if (!Number.isInteger(parsed.flights) || parsed.flights < 1) throw new RangeError("flights must be a positive integer");
   if (typeof parsed.model !== "string" || !parsed.model) throw new TypeError("model must be a string");
@@ -144,6 +147,7 @@ export function loadCeiling(path) {
   if (typeof parsed.ledger !== "string" || !parsed.ledger) throw new TypeError("ledger must be a path");
   return {
     ceilingUsd: parsed.ceilingUsd,
+    windowDays: parsed.windowDays,
     flights: parsed.flights,
     model: parsed.model,
     pricesUsdPerMillion: prices,
@@ -159,17 +163,43 @@ export function reserveCharge(ceiling) {
 // Rows for one runId carry cumulative usage (a provisional row per result event, a final
 // row at EOF), so a run's figure is its LAST row, never the sum of its rows. Rows without a
 // runId (hand-recorded, older ledgers) count one each.
-export function ledgerSpend(rows) {
+//
+// With a window ({ now, windowDays }) a run counts when its last row was recorded inside
+// the window; a row with no recordedAt always counts, since an undated dollar is not a free
+// one. A final row dated before its provisional one cannot happen on a real ledger and is
+// refused rather than read either way.
+export function ledgerSpend(rows, window) {
   if (!Array.isArray(rows)) throw new TypeError("rows must be an array");
+  let since = null;
+  if (window !== undefined) {
+    const { now, windowDays } = window ?? {};
+    if (!(now instanceof Date) || Number.isNaN(now.getTime())) throw new TypeError("window.now must be a Date");
+    if (!Number.isInteger(windowDays) || windowDays < 1) throw new RangeError("window.windowDays must be a positive integer");
+    since = now.getTime() - windowDays * 86_400_000;
+  }
   const lastByRun = new Map();
   let total = 0;
   for (const row of rows) {
     if (!row || typeof row.usd !== "number") throw new TypeError("ledger row usd must be a number");
     if (!(row.usd >= 0)) throw new RangeError("ledger row usd must be non-negative");
-    if (typeof row.runId === "string" && row.runId) lastByRun.set(row.runId, row.usd);
-    else total += row.usd;
+    let at = null;
+    if (row.recordedAt !== undefined) {
+      at = Date.parse(row.recordedAt);
+      if (Number.isNaN(at)) throw new RangeError("ledger row recordedAt is not a date");
+    }
+    if (typeof row.runId === "string" && row.runId) {
+      const prior = lastByRun.get(row.runId);
+      if (prior && prior.at !== null && at !== null && at < prior.at) {
+        throw new RangeError(`ledger rows for run ${row.runId} are out of order`);
+      }
+      lastByRun.set(row.runId, { usd: row.usd, at: at ?? prior?.at ?? null });
+    } else if (since === null || at === null || at >= since) {
+      total += row.usd;
+    }
   }
-  for (const usd of lastByRun.values()) total += usd;
+  for (const { usd, at } of lastByRun.values()) {
+    if (since === null || at === null || at >= since) total += usd;
+  }
   return roundCents(total);
 }
 
@@ -235,16 +265,16 @@ function resolveConfig(flags) {
 
 function check(flags) {
   const { ceiling, ledgerPath } = resolveConfig(flags);
-  const spentUsd = ledgerSpend(readLedger(ledgerPath));
+  const spentUsd = ledgerSpend(readLedger(ledgerPath), { now: new Date(), windowDays: ceiling.windowDays });
   const v = verdict({ spentUsd, ceilingUsd: ceiling.ceilingUsd });
   if (!v.allowed) {
     process.stderr.write(
-      `spend sluis: ceiling reached: $${spentUsd.toFixed(2)} recorded of a $${ceiling.ceilingUsd.toFixed(2)} ceiling in ${ledgerPath}; no flight starts until a human decides\n`,
+      `spend sluis: ceiling reached: $${spentUsd.toFixed(2)} recorded in the last ${ceiling.windowDays} days of a $${ceiling.ceilingUsd.toFixed(2)} ceiling in ${ledgerPath}; no flight starts until a human decides\n`,
     );
     return EXIT_REFUSED;
   }
   // stderr, so the runner's stdout stays the agent's stream alone
-  process.stderr.write(`spend sluis: remaining $${v.remainingUsd.toFixed(2)} of $${ceiling.ceilingUsd.toFixed(2)} (ledger ${ledgerPath})\n`);
+  process.stderr.write(`spend sluis: remaining $${v.remainingUsd.toFixed(2)} of $${ceiling.ceilingUsd.toFixed(2)} in the last ${ceiling.windowDays} days (ledger ${ledgerPath})\n`);
   return 0;
 }
 

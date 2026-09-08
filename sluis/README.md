@@ -37,4 +37,4 @@ Read it with `jq -s 'map(.usd) | add' ~/.trekvaart/ledger.jsonl`. Machinist's ow
 node --test sluis/spend-ceiling.test.mjs
 ```
 
-The spec covers the pricing arithmetic, the stream parser (both `modelUsage` and the single-block fallback), dated-id resolution, the config validation, the no-override property, both commands end to end through a temporary ledger, and that five unreadable runs exhaust the ceiling.
+The spec covers the pricing arithmetic, the stream parser (both `modelUsage` and the single-block fallback), dated-id resolution, the config validation, the no-override property, both commands end to end through a temporary ledger, and that `flights` unreadable runs exhaust the ceiling inside one window.
