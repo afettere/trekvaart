@@ -47,7 +47,7 @@ comment with evidence, and stop.
 # State and output
 
 Keep exactly one of these labels on the issue (they exist already; `docs/labels.md` defines
-them). The runner's own admission label (`trekvaart:queued`) comes off when you set the first
+them). The runner's own admission label (`machinist:queued`) comes off when you set the first
 one:
 
 - `trekvaart:planning`
