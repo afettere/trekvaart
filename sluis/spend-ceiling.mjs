@@ -316,6 +316,13 @@ async function record(flags) {
       priceBasis: ceiling.priceBasis,
     };
   };
+  // A result event arrives only at the END of a print-mode session, so a run the runner kills
+  // before that leaves no provisional row either (the deliberate strand of 2026-09-09: three
+  // minutes of a foreman run, no row). Charge the reserve before the first byte; every later
+  // row for this runId supersedes it, since ledgerSpend counts a run's last row.
+  const started = rowFor("started", null);
+  appendLedger(ledgerPath, started);
+  process.stderr.write(`spend sluis: started ${runId} at the reserve ${started.usd.toFixed(2)} until a result event prices it\n`);
   let lastUsage = null;
   const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
   for await (const line of rl) {

@@ -16,7 +16,7 @@
 // Liveness is a marker file per issue in the markers directory, written by the wrapper before
 // the agent starts and removed when it exits; a marker whose pid is dead is a killed run.
 // The sweeper never sets `requested`: only a human re-admits a flight.
-import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -175,9 +175,22 @@ export function readMarkers(dir) {
       throw new Error(`marker ${join(dir, name)} is not JSON`);
     }
     if (!Number.isInteger(marker.issue)) throw new Error(`marker ${name} names no issue`);
-    out.push({ issue: marker.issue, pid: marker.pid, runId: marker.runId ?? null, startedAt: marker.startedAt ?? null, alive: processAlive(marker.pid) });
+    out.push({ issue: marker.issue, pid: marker.pid, runId: marker.runId ?? null, startedAt: marker.startedAt ?? null, alive: processAlive(marker.pid), path: join(dir, name) });
   }
   return out;
+}
+
+// A dead marker is spent once the sweep has acted on its issue, or once its issue no longer
+// carries an in-flight label at all (the flight ended some other way). Left behind, it names
+// a dead run forever; the strand of 2026-09-09 left 6.json after the sweep that used it. A
+// dead marker inside the grace period stays, so the next tick can still name its run.
+function removeSpentMarkers(active, issues, actions) {
+  const acted = new Set(actions.map((a) => a.issue));
+  const inFlight = new Set(issues.map((i) => i.number));
+  for (const run of active) {
+    if (run.alive || !run.path) continue;
+    if (acted.has(run.issue) || !inFlight.has(run.issue)) rmSync(run.path, { force: true });
+  }
 }
 
 // ---- CLI
@@ -210,11 +223,12 @@ function sweep(flags) {
   const issues = listInFlightIssues(flags.repo);
   const active = readMarkers(markers);
   const actions = strandedFlights({ issues, active, now: new Date(), graceMinutes });
+  const dryRun = flags["dry-run"] === true;
   if (actions.length === 0) {
     process.stderr.write(`stranded: ${issues.length} in-flight issue(s), none stranded\n`);
-    return 0;
   }
-  for (const action of actions) applyAction(flags.repo, action, { dryRun: flags["dry-run"] === true });
+  for (const action of actions) applyAction(flags.repo, action, { dryRun });
+  if (!dryRun) removeSpentMarkers(active, issues, actions);
   return 0;
 }
 
