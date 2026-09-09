@@ -19,30 +19,40 @@ const here = dirname(fileURLToPath(import.meta.url));
 const wrapper = join(here, "bin", "sluis-run");
 const repoRoot = join(here, "..", "..");
 
-function fixture({ agentExit = 0, viewLabels = ["trekvaart:building"] } = {}) {
+function fixture({ agentExit = 0, viewLabels = ["trekvaart:building"], comments = [], readyAfterRuns = 0 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "sluis-run-"));
   const bin = join(dir, "bin");
   mkdirSync(bin, { recursive: true });
   const ghLog = join(dir, "gh.log");
+  const labelsFile = join(dir, "labels.json");
+  writeFileSync(labelsFile, JSON.stringify(viewLabels));
+  const view = (labels) => JSON.stringify({ labels: labels.map((name) => ({ name })), comments: comments.map((body) => ({ body })) });
   writeFileSync(
     join(bin, "gh"),
     `#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "${ghLog}"
 case "$1 $2" in
-  "issue view") printf '%s' '${JSON.stringify({ labels: viewLabels.map((name) => ({ name })) })}' ;;
+  "issue view") node -e 'const l=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(JSON.stringify({labels:l.map(n=>({name:n})),comments:${JSON.stringify(comments.map((body) => ({ body })))}}))' "${labelsFile}" ;;
   *) : ;;
 esac
 `,
   );
+  void view;
   chmodSync(join(bin, "gh"), 0o755);
   // A stand-in agent: records the environment it was given and the prompt it read, emits
-  // one result event so the sluis has something to price, and exits as told.
+  // one result event so the sluis has something to price, and exits as told. It counts its
+  // runs; after readyAfterRuns runs it flips the issue to ready-for-review, the way a
+  // resumed foreman finishes the gate.
   const agentLog = join(dir, "agent.log");
+  const runsLog = join(dir, "runs.log");
   writeFileSync(
     join(bin, "fake-agent"),
     `#!/usr/bin/env bash
 prompt="$(cat)"
 printf 'BG=%s\\nMARKERS=%s\\nPROMPT=%s\\n' "\${CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS:-unset}" "$(ls "\${TREKVAART_ACTIVE_DIR}" 2>/dev/null | tr '\\n' ' ')" "$prompt" > "${agentLog}"
+printf '%s\\n' "\${MACHINIST_RUN_ID:-}" >> "${runsLog}"
+runs="$(wc -l < "${runsLog}")"
+if [[ ${readyAfterRuns} -gt 0 && "$runs" -ge ${readyAfterRuns} ]]; then printf '%s' '["trekvaart:ready-for-review"]' > "${labelsFile}"; fi
 printf '%s\\n' '{"type":"result","subtype":"success","usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":5}}'
 exit ${agentExit}
 `,
@@ -60,6 +70,8 @@ exit ${agentExit}
     config,
     ghCalls: () => (existsSync(ghLog) ? readFileSync(ghLog, "utf8").trim().split("\n") : []),
     agent: () => (existsSync(agentLog) ? readFileSync(agentLog, "utf8") : ""),
+    runs: () => (existsSync(runsLog) ? readFileSync(runsLog, "utf8").trim().split("\n").filter(Boolean) : []),
+    ledger: () => (existsSync(join(dir, "ledger.jsonl")) ? readFileSync(join(dir, "ledger.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l)) : []),
   };
 }
 
@@ -149,4 +161,59 @@ test("the issue comes from the work request, not from the first URL in the rende
   const calls = f.ghCalls();
   assert.ok(!calls.some((c) => /11866/.test(c)), "the header's issue must never be touched:\n" + calls.join("\n"));
   assert.ok(calls.some((c) => /issue edit 8138 .*--add-label trekvaart:needs-human/.test(c)), calls.join("\n"));
+});
+
+// ---- the automation gate: an agent that ends its turn while checks are pending.
+//
+// The first product flight (2026-09-09, #11997) opened its pull request, entered the CI wait,
+// and exited 0 two minutes later with the issue at verifying and the PR comment posted. The
+// foreman's own contract is to hold up to AUTOMATION_GATE_MINUTES; an early exit 0 there is a
+// turn ending, not a strand. The wrapper resumes the foreman (its resume path revalidates the
+// branch, the PR and the checks) a capped number of times before it calls it stranded.
+
+const PR_COMMENT = "<!-- trekvaart:foreman-pr -->\nPull request: https://github.com/o/r/pull/9";
+
+test("an agent that exits 0 at verifying with its PR posted is resumed until the issue is terminal", () => {
+  const f = fixture({ agentExit: 0, viewLabels: ["trekvaart:verifying"], comments: [PR_COMMENT], readyAfterRuns: 2 });
+  const r = runWrapper(f, { runId: "run_gate" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(f.runs(), ["run_gate", "run_gate-r1"], "one resume, under its own run id");
+  assert.ok(!f.ghCalls().some((c) => /issue edit|issue comment/.test(c)), "nothing repaired:\n" + f.ghCalls().join("\n"));
+  assert.match(r.stderr, /resum/i);
+  const finals = f.ledger().filter((row) => row.stage === "final").map((row) => row.runId);
+  assert.deepEqual(finals, ["run_gate", "run_gate-r1"], "each resume is priced as its own run");
+});
+
+test("resumes are capped at three; after that the label is repaired and the stop comment says how many", () => {
+  const f = fixture({ agentExit: 0, viewLabels: ["trekvaart:verifying"], comments: [PR_COMMENT] });
+  const r = runWrapper(f, { runId: "run_cap" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(f.runs(), ["run_cap", "run_cap-r1", "run_cap-r2", "run_cap-r3"]);
+  const calls = f.ghCalls();
+  assert.ok(calls.some((c) => /issue edit 8138 .*--remove-label trekvaart:verifying.*--add-label trekvaart:needs-human/.test(c)), calls.join("\n"));
+  assert.match(calls.join("\n"), /3 resume/);
+});
+
+test("no resume without the PR comment: an exit 0 at verifying with nothing posted is repaired at once", () => {
+  const f = fixture({ agentExit: 0, viewLabels: ["trekvaart:verifying"], comments: [] });
+  const r = runWrapper(f, { runId: "run_nopr" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(f.runs(), ["run_nopr"]);
+  assert.ok(f.ghCalls().some((c) => /--add-label trekvaart:needs-human/.test(c)));
+});
+
+test("a non-zero exit is never resumed, PR or not", () => {
+  const f = fixture({ agentExit: 3, viewLabels: ["trekvaart:verifying"], comments: [PR_COMMENT] });
+  const r = runWrapper(f, { runId: "run_err" });
+  assert.equal(r.status, 3);
+  assert.deepEqual(f.runs(), ["run_err"]);
+  assert.ok(f.ghCalls().some((c) => /--add-label trekvaart:needs-human/.test(c)));
+});
+
+test("an exit 0 at building is not a gate exit: repaired, not resumed", () => {
+  const f = fixture({ agentExit: 0, viewLabels: ["trekvaart:building"], comments: [PR_COMMENT] });
+  const r = runWrapper(f, { runId: "run_bld" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(f.runs(), ["run_bld"]);
+  assert.ok(f.ghCalls().some((c) => /--remove-label trekvaart:building.*--add-label trekvaart:needs-human/.test(c)));
 });

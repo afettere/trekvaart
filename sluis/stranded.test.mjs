@@ -13,7 +13,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
-import { strandedFlights, IN_FLIGHT_LABELS, parseIssueUrl, stopComment } from "./stranded.mjs";
+import { strandedFlights, IN_FLIGHT_LABELS, parseIssueUrl, stopComment, exitVerdict, PR_MARKER } from "./stranded.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const cli = join(here, "stranded.mjs");
@@ -106,9 +106,28 @@ test("the stop comment names the exit, the label it found, and the one human act
   assert.match(text, /<!-- trekvaart:stop -->/);
 });
 
+// ---- the exit verdict: what the wrapper does when the agent exits on its own
+
+test("exitVerdict resumes only an exit 0 at verifying with the PR posted and budget left", () => {
+  const base = { exitCode: 0, from: "trekvaart:verifying", hasPr: true, resumesLeft: 1 };
+  assert.equal(exitVerdict(base), "resume");
+  assert.equal(exitVerdict({ ...base, resumesLeft: 0 }), "repair");
+  assert.equal(exitVerdict({ ...base, hasPr: false }), "repair");
+  assert.equal(exitVerdict({ ...base, exitCode: 1 }), "repair");
+  assert.equal(exitVerdict({ ...base, exitCode: null }), "repair");
+  assert.equal(exitVerdict({ ...base, from: "trekvaart:building" }), "repair");
+  assert.equal(exitVerdict({ ...base, from: null }), "none");
+  assert.equal(PR_MARKER, "<!-- trekvaart:foreman-pr -->");
+});
+
+test("exitVerdict refuses malformed input", () => {
+  assert.throws(() => exitVerdict({ exitCode: 0, from: "trekvaart:verifying", hasPr: "yes", resumesLeft: 1 }), TypeError);
+  assert.throws(() => exitVerdict({ exitCode: 0, from: "trekvaart:verifying", hasPr: true, resumesLeft: -1 }), RangeError);
+});
+
 // ---- the CLI, through a fake gh
 
-function fakeGh(dir, { issues = [], viewLabels = [] } = {}) {
+function fakeGh(dir, { issues = [], viewLabels = [], comments = [] } = {}) {
   const bin = join(dir, "bin");
   mkdirSync(bin, { recursive: true });
   const log = join(dir, "gh.log");
@@ -116,7 +135,7 @@ function fakeGh(dir, { issues = [], viewLabels = [] } = {}) {
 printf '%s\\n' "$*" >> "${log}"
 case "$1 $2" in
   "issue list") printf '%s' '${JSON.stringify(issues)}' ;;
-  "issue view") printf '%s' '${JSON.stringify({ labels: viewLabels.map((name) => ({ name })) })}' ;;
+  "issue view") printf '%s' '${JSON.stringify({ labels: viewLabels.map((name) => ({ name })), comments: comments.map((body) => ({ body })) })}' ;;
   *) : ;;
 esac
 `;
@@ -219,4 +238,34 @@ test("repair swaps the label and comments when the agent exits with the issue in
   const r2 = runCli(["repair", "--issue", "https://github.com/o/r/issues/8138", "--exit", "0", "--run-id", "run_k"], { bin: quiet.bin });
   assert.equal(r2.status, 0, r2.stderr);
   assert.ok(!quiet.log().some((c) => /issue edit|issue comment/.test(c)), quiet.log().join("\n"));
+});
+
+test("repair prints resume, and touches nothing, for a gate exit with budget; prints repaired once the budget is gone", () => {
+  const pr = "<!-- trekvaart:foreman-pr -->\nPull request: https://github.com/o/r/pull/9";
+  const dir = mkdtempSync(join(tmpdir(), "stranded-"));
+  const gh = fakeGh(dir, { viewLabels: ["trekvaart:verifying"], comments: [pr] });
+  const r = runCli(["repair", "--issue", "https://github.com/o/r/issues/8138", "--exit", "0", "--run-id", "run_g", "--resume-budget", "2"], { bin: gh.bin });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout.trim(), "resume");
+  assert.ok(!gh.log().some((c) => /issue edit|issue comment/.test(c)), gh.log().join("\n"));
+
+  const spent = fakeGh(mkdtempSync(join(tmpdir(), "stranded-")), { viewLabels: ["trekvaart:verifying"], comments: [pr] });
+  const r2 = runCli(["repair", "--issue", "https://github.com/o/r/issues/8138", "--exit", "0", "--run-id", "run_g", "--resume-budget", "0", "--resumed", "3"], { bin: spent.bin });
+  assert.equal(r2.status, 0, r2.stderr);
+  assert.equal(r2.stdout.trim(), "repaired");
+  const calls = spent.log();
+  assert.ok(calls.some((c) => /--remove-label trekvaart:verifying.*--add-label trekvaart:needs-human/.test(c)), calls.join("\n"));
+  assert.match(calls.join("\n"), /3 resume/);
+  assert.match(calls.join("\n"), /automation gate/i);
+});
+
+test("repair without --resume-budget behaves as before: a gate exit is repaired, and a terminal issue prints none", () => {
+  const pr = "<!-- trekvaart:foreman-pr -->\nPull request: https://github.com/o/r/pull/9";
+  const gh = fakeGh(mkdtempSync(join(tmpdir(), "stranded-")), { viewLabels: ["trekvaart:verifying"], comments: [pr] });
+  const r = runCli(["repair", "--issue", "https://github.com/o/r/issues/8138", "--exit", "0", "--run-id", "run_g"], { bin: gh.bin });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout.trim(), "repaired");
+  const done = fakeGh(mkdtempSync(join(tmpdir(), "stranded-")), { viewLabels: ["trekvaart:ready-for-review"] });
+  const r2 = runCli(["repair", "--issue", "https://github.com/o/r/issues/8138", "--exit", "0", "--run-id", "run_g"], { bin: done.bin });
+  assert.equal(r2.stdout.trim(), "none");
 });
