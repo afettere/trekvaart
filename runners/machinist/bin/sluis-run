@@ -52,10 +52,18 @@ node "$sluis" check "${ceiling_args[@]}"
 export CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0
 
 # The prompt arrives on stdin and is passed to the agent unchanged; a copy is read for the
-# issue URL Machinist renders ("Complete https://github.com/OWNER/REPO/issues/N").
+# issue URL Machinist renders ("Complete https://github.com/OWNER/REPO/issues/N"). That
+# line is the work request; the rest of the rendered prompt is the foreman text, whose own
+# header links other issues, so the FIRST URL in the file is the wrong one (the first flight
+# keyed its marker on the prompt's provenance link). Read the request line, then the
+# <prompt> block, and never the file at large.
 prompt_file="$(mktemp)"
 cat > "$prompt_file"
-issue_url="$(grep -oE 'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[0-9]+' "$prompt_file" | head -n 1 || true)"
+issue_re='https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[0-9]+'
+issue_url="$(grep -oE "^Complete ${issue_re}" "$prompt_file" | head -n 1 | sed 's/^Complete //' || true)"
+if [[ -z "$issue_url" ]]; then
+  issue_url="$(sed -n '/<prompt>/,/<\/prompt>/p' "$prompt_file" | grep -oE "$issue_re" | head -n 1 || true)"
+fi
 issue_number=""
 if [[ -n "$issue_url" ]]; then issue_number="${issue_url##*/}"; fi
 
