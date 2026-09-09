@@ -46,8 +46,8 @@ echo "== 1. Machinist ${MACHINIST_VERSION}"
 curl -fsSL "https://raw.githubusercontent.com/owainlewis/machinist/${MACHINIST_VERSION}/scripts/setup-vm.sh" |
   MACHINIST_VERSION="${MACHINIST_VERSION}" bash
 
-echo "== 2. nodejs, sqlite3, ufw, and gh from GitHub's repository"
-apt-get install -y nodejs sqlite3 ufw gh
+echo "== 2. nodejs, sqlite3, ufw, unzip (for the fnm installer), and gh from GitHub's repository"
+apt-get install -y nodejs sqlite3 ufw gh unzip
 node --version
 gh --version | head -1
 
