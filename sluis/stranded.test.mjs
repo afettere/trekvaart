@@ -269,3 +269,16 @@ test("repair without --resume-budget behaves as before: a gate exit is repaired,
   const r2 = runCli(["repair", "--issue", "https://github.com/o/r/issues/8138", "--exit", "0", "--run-id", "run_g"], { bin: done.bin });
   assert.equal(r2.stdout.trim(), "none");
 });
+
+test("sweep records its tick per repository in the ticks directory, so the board can read it without the journal", () => {
+  const dir = mkdtempSync(join(tmpdir(), "stranded-"));
+  const gh = fakeGh(dir, { issues: [] });
+  const ticks = join(dir, "ticks");
+  const r = runCli(["sweep", "--repo", "o/r", "--markers", join(dir, "active"), "--ticks", ticks], { bin: gh.bin });
+  assert.equal(r.status, 0, r.stderr);
+  const tick = JSON.parse(readFileSync(join(ticks, "o__r.json"), "utf8"));
+  assert.equal(tick.repo, "o/r");
+  assert.ok(!Number.isNaN(Date.parse(tick.at)));
+  assert.match(tick.line, /0 in-flight issue\(s\), none stranded/);
+  assert.equal(tick.moved, 0);
+});

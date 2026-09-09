@@ -421,3 +421,17 @@ test("record writes a reserve row before the first byte arrives, so a run killed
   assert.deepEqual(all.map((row) => [row.runId, row.stage, row.priced, row.usd, row.usage]), [["run-cut", "started", "reserve", 16.67, null]]);
   assert.equal(ledgerSpend(all), 16.67);
 });
+
+// ---- the issue on the row. A run's marker names its issue only while the run is alive; after
+// that, nothing joins a ledger row to the flight it paid for. The wrapper passes the issue it
+// read from the prompt, and every row for the run carries it.
+
+test("record --issue writes the issue number on every row for the run", () => {
+  const dir = tmp();
+  const ledger = join(dir, "ledger.jsonl");
+  const r = run(["record", "--config", writeConfig(dir), "--ledger", ledger, "--run-id", "run-i", "--model", "claude-opus-5", "--issue", "12100", "--repo", "Indemnia/indemnia"], { input: resultLine(fullUsage) });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(rows(ledger).map((row) => [row.stage, row.issue, row.repo]), [["started", 12100, "Indemnia/indemnia"], ["provisional", 12100, "Indemnia/indemnia"], ["final", 12100, "Indemnia/indemnia"]]);
+  const r2 = run(["record", "--config", writeConfig(dir), "--ledger", ledger, "--run-id", "run-j", "--model", "claude-opus-5", "--issue", "x"], { input: "no usage\n" });
+  assert.notEqual(r2.status, 0, "a non-numeric issue is refused");
+});

@@ -232,3 +232,12 @@ test("the agent sees ~/.local/bin first on PATH when it exists", () => {
   const path = /^PATH=(.*)$/m.exec(f.agent())?.[1] ?? "";
   assert.equal(path.split(":")[0], join(f.dir, ".local", "bin"), path);
 });
+
+test("the ledger rows carry the issue and repository the wrapper read from the prompt", () => {
+  const f = fixture();
+  const r = runWrapper(f, { runId: "run_iss" });
+  assert.equal(r.status, 0, r.stderr);
+  const rows = f.ledger().filter((row) => row.runId === "run_iss");
+  assert.ok(rows.length >= 2);
+  assert.ok(rows.every((row) => row.issue === 8138 && row.repo === "o/r"), JSON.stringify(rows));
+});
