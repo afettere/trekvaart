@@ -1,23 +1,25 @@
-# The Trekvaart board as a user service for the runtime user. Installed by the bootstrap at
-# ~/.config/systemd/user/trekvaart-board.service; `loginctl enable-linger machinist` keeps
-# user services up without a login session.
+# The Trekvaart board as a system service running as the runtime user, the same shape as
+# Machinist's two services. Installed by the bootstrap at /etc/systemd/system/.
 #
-#   systemctl --user enable --now trekvaart-board.service
-#   systemctl --user status trekvaart-board.service
-#   journalctl --user -u trekvaart-board.service -f
+#   systemctl enable --now trekvaart-board.service      # as root
+#   systemctl status trekvaart-board.service
+#   journalctl -u trekvaart-board.service -f
 #
 # Localhost only, like Machinist's UI: reach it over the SSH tunnel (install/README.md).
 [Unit]
 Description=Trekvaart board (read-only, 127.0.0.1:7332)
-After=network.target
+After=network.target machinist-control-plane.service
 
 [Service]
 Type=simple
-WorkingDirectory=%h/trekvaart
-Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=%h/.local/bin/node %h/trekvaart/board/server.mjs --listen 127.0.0.1:7332 --refresh-seconds 60
+User=machinist
+Group=machinist
+WorkingDirectory=/home/machinist/trekvaart
+Environment=HOME=/home/machinist
+Environment=PATH=/home/machinist/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/machinist/.local/bin/node /home/machinist/trekvaart/board/server.mjs --listen 127.0.0.1:7332 --refresh-seconds 60
 Restart=on-failure
 RestartSec=5
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target

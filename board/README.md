@@ -11,7 +11,7 @@ made. Spec: [`docs/ux/board-ux-spec.md`](../docs/ux/board-ux-spec.md).
 | [`compose.mjs`](compose.mjs) | `composeBoard({ now, ceiling, repos, box, issues, prs, ledger, markers, sweeps, errors })`: the pure composer from the sources to the page's view model. Every state in the spec's pass 5 is decided here and pinned in [`compose.test.mjs`](compose.test.mjs). |
 | [`server.mjs`](server.mjs) | One HTTP server, no framework: `/` is the page, `/api/board` the view, cached for `--refresh-seconds` (60). Reads GitHub through the box's `gh` login (one `issue list` per lifecycle label per repository, the comments and timeline of each flight, the PR's check rollup), the ledger and the markers under `~/.trekvaart`, the sweeper's tick files, and the box (control plane probe on Machinist's `listen`, `gh api user`, versions). A source that fails keeps its last good read and reports beside it. |
 | [`page.html`](page.html) | The page: renders `/api/board` and refreshes every 60 s. Times are shown in Mountain Time. |
-| [`../install/trekvaart-board.service`](../install/trekvaart-board.service) | The user service that keeps it up. |
+| [`../install/trekvaart-board.service`](../install/trekvaart-board.service) | The system service (running as `machinist`, like Machinist's own) that keeps it up. |
 
 ## Reading it
 

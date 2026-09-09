@@ -109,14 +109,13 @@ for tool in node npm npx; do
 done
 run_as_runtime bash -lc 'echo "   node $(node --version), npm $(npm --version) for the runtime user"'
 
-echo "== 5c. The Trekvaart board, a user service for the runtime user"
-# Read-only page on 127.0.0.1:7332 beside Machinist's UI (board/README.md). Lingering keeps user
-# services up without a login session.
-run_as_runtime mkdir -p "${RUNTIME_HOME}/.config/systemd/user"
-run_as_runtime install -m 0644 "${RUNTIME_HOME}/trekvaart/install/trekvaart-board.service" "${RUNTIME_HOME}/.config/systemd/user/trekvaart-board.service"
-loginctl enable-linger "${RUNTIME_USER}"
-run_as_runtime env XDG_RUNTIME_DIR="/run/user/$(id -u "${RUNTIME_USER}")" systemctl --user daemon-reload || echo "   user systemd not reachable from here; run 'systemctl --user enable --now trekvaart-board.service' as ${RUNTIME_USER}"
-run_as_runtime env XDG_RUNTIME_DIR="/run/user/$(id -u "${RUNTIME_USER}")" systemctl --user enable --now trekvaart-board.service || true
+echo "== 5c. The Trekvaart board, a system service running as the runtime user"
+# Read-only page on 127.0.0.1:7332 beside Machinist's UI (board/README.md). The same shape as
+# Machinist's two services: a system unit with User=, so it needs no user session or lingering.
+install -m 0644 "${RUNTIME_HOME}/trekvaart/install/trekvaart-board.service" /etc/systemd/system/trekvaart-board.service
+systemctl daemon-reload
+systemctl enable --now trekvaart-board.service
+systemctl is-active trekvaart-board.service || echo "   the board did not start; journalctl -u trekvaart-board.service"
 
 echo "== 6. Firewall"
 bash "${RUNTIME_HOME}/trekvaart/install/firewall.sh"

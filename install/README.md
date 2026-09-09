@@ -129,13 +129,13 @@ ssh -N -L 7331:127.0.0.1:7331 -L 7332:127.0.0.1:7332 machinist@VM_HOST
 
 Then open <http://127.0.0.1:7331> for Machinist's UI (jobs, each run's stream, exit codes) and <http://127.0.0.1:7332> for the Trekvaart board (what is waiting on you, flights, spend against the ceiling, the sweeper's last tick; read-only, see [`board/README.md`](../board/README.md)). Do not expose either port.
 
-The board is a user service. The bootstrap installs it; a box set up before it existed gets it by hand, as `machinist`:
+The board is a system service running as `machinist`, the same shape as Machinist's two. The bootstrap installs it; a box set up before it existed gets it by hand, as root:
 
 ```bash
-mkdir -p ~/.config/systemd/user && cp ~/trekvaart/install/trekvaart-board.service ~/.config/systemd/user/ && systemctl --user daemon-reload && systemctl --user enable --now trekvaart-board.service && systemctl --user status trekvaart-board.service --no-pager | head -n 5
+install -m 0644 /home/machinist/trekvaart/install/trekvaart-board.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now trekvaart-board.service && systemctl is-active trekvaart-board.service
 ```
 
-and once, as root, so it stays up without a login session: `loginctl enable-linger machinist`.
+After a `git pull` that touches `board/`, `systemctl restart trekvaart-board.service` as root; the page and the composer are read at start.
 
 ## Firewall
 
