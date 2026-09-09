@@ -9,7 +9,7 @@ Sized for a pilot: a 4 vCPU / 8 GB class VM (a Hetzner CX32 or equivalent) runni
 | Credential | Used by | Scope |
 | :-- | :-- | :-- |
 | Your SSH key | you, to reach the VM | root for bootstrap; `machinist` for everything after |
-| `gh auth login` on the box | Machinist's trigger (poll, relabel, permission check), the foreman (issues, PRs, comments, checks), the wrapper and the sweeper (a label swap and a stop comment) | an account with write access to the registered repositories |
+| `gh auth login` on the box | Machinist's trigger (poll, relabel, permission check), the foreman (issues, PRs, comments, checks), the wrapper and the sweeper (a label swap and a stop comment) | **a machine account** (for example `trekvaart-bot`) with write access to the registered repositories, never your own. Machinist polls with `gh search issues`, which is GraphQL, and GraphQL points are spent per user across every token acting as that user, including the GitHub-App tokens your interactive agent sessions use; on 2026-09-09 the box's polls were refused for an hour while the REST rate-limit endpoint still read 5000 remaining, because those sessions had emptied the user's budget. A machine account has a budget nothing else touches. |
 | A deploy key created on the box | `git clone`, `fetch`, `push` from the worker | one product repository, write access; the default branch's own protection (pull request plus checks) is what keeps it off `main`, since GitHub cannot scope a deploy key narrower than the repository |
 | The agent CLI's own login | the executor | the subscription; the box holds no API key, and the ledger's dollars are list-price shadows of that allowance |
 
@@ -29,13 +29,16 @@ bash bootstrap.sh
 
 ```sh
 su - machinist
-gh auth login --hostname github.com --git-protocol https --web
+gh auth login --hostname github.com --git-protocol https --web   # as the machine account, in a browser logged in as it
+gh auth setup-git
 claude                      # /login, finish in the browser, then /exit (never Ctrl+Z)
-git config --global user.name "Your Name"
-git config --global user.email "you@example.com"
+git config --global user.name "trekvaart-bot"
+git config --global user.email "trekvaart-bot@users.noreply.github.com"
 ```
 
-The build reach commits as that git identity; without one it invents a repo-local identity from the `gh` account, which a reviewer then has to check. HTTPS for `gh` lets the throwaway repository below clone with the `gh` login alone; the product repository uses the deploy key.
+Create the machine account first (a GitHub user of its own, two-factor on, invited as a collaborator with **Write** on every registered repository, invitations accepted as that account). The build reach commits as the identity above, so a reviewer sees what wrote the change.
+
+Without a git identity the build reach invents a repo-local one from the `gh` account, which a reviewer then has to check. `gh auth setup-git` makes every clone and push use the machine account's token over HTTPS.
 
 ### Deploy key
 
