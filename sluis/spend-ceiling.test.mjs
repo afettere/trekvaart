@@ -253,7 +253,7 @@ test("record passes the stream through byte for byte and appends a priced row", 
   assert.equal(r.stdout, stream);
   const all = rows(ledger);
   // One provisional row for the result event, one final row at EOF; the final row counts.
-  assert.deepEqual(all.map((row) => row.stage), ["provisional", "final"]);
+  assert.deepEqual(all.map((row) => row.stage), ["started", "provisional", "final"]);
   const row = all.at(-1);
   assert.equal(row.runId, "run-1");
   assert.equal(row.model, "claude-opus-5");
@@ -370,11 +370,12 @@ test("record appends a provisional row at each result event, so a killed run sti
   child.kill("SIGKILL");
   await new Promise((resolve) => child.on("exit", resolve));
   const all = rows(ledger);
-  assert.equal(all.length, 1);
-  assert.equal(all[0].runId, "run-killed");
-  assert.equal(all[0].stage, "provisional");
-  assert.equal(all[0].priced, "list");
-  assert.equal(all[0].usd, 25);
+  assert.equal(all.length, 2);
+  assert.equal(all[1].runId, "run-killed");
+  assert.equal(all[1].stage, "provisional");
+  assert.equal(all[1].priced, "list");
+  assert.equal(all[1].usd, 25);
+  assert.equal(ledgerSpend(all), 25, "the provisional figure supersedes the started reserve");
 });
 
 test("record writes one provisional row per result event and a final row at EOF, and the final row is what the ledger counts", () => {
@@ -386,15 +387,37 @@ test("record writes one provisional row per result event and a final row at EOF,
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout, stream);
   const all = rows(ledger);
-  assert.deepEqual(all.map((row) => [row.stage, row.usd]), [["provisional", 12.5], ["provisional", 25], ["final", 25]]);
+  assert.deepEqual(all.map((row) => [row.stage, row.usd]), [["started", 16.67], ["provisional", 12.5], ["provisional", 25], ["final", 25]]);
   assert.ok(all.every((row) => row.runId === "run-full"));
   assert.equal(ledgerSpend(all), 25);
 });
 
-test("record writes only a final reserve row when the stream carries no result event", () => {
+test("record writes a started reserve row, then a final reserve row when the stream carries no result event", () => {
   const dir = tmp();
   const ledger = join(dir, "ledger.jsonl");
   const r = run(["record", "--config", writeConfig(dir), "--ledger", ledger, "--run-id", "run-silent", "--model", "claude-opus-5"], { input: "no usage\n" });
   assert.equal(r.status, 0, r.stderr);
-  assert.deepEqual(rows(ledger).map((row) => [row.stage, row.priced, row.usd]), [["final", "reserve", 16.67]]);
+  assert.deepEqual(rows(ledger).map((row) => [row.stage, row.priced, row.usd]), [["started", "reserve", 16.67], ["final", "reserve", 16.67]]);
+});
+
+// ---- the started row: a result event arrives only at the END of a print-mode session, so
+// a run the runner kills before that leaves no provisional row either. Measured on the
+// deliberate strand (2026-09-09, trekvaart-evals#6): three minutes of a foreman run under a
+// 3m timeout, killed with the whole process group, and the ledger gained no row at all. The
+// cost was real and the ceiling never saw it, which is a timeout enforcing the spend cap.
+// So record charges the reserve before the first byte arrives; every later row supersedes it.
+
+test("record writes a reserve row before the first byte arrives, so a run killed before any result event still counts at the reserve", async () => {
+  const dir = tmp();
+  const ledger = join(dir, "ledger.jsonl");
+  const child = spawn(process.execPath, [cli, "record", "--config", writeConfig(dir), "--ledger", ledger, "--run-id", "run-cut", "--model", "claude-opus-5"], { stdio: ["pipe", "pipe", "pipe"] });
+  child.stdout.resume();
+  child.stderr.resume();
+  // Nothing is written to the agent's stream: the runner kills the group before any result.
+  for (let i = 0; i < 50 && !existsSync(ledger); i++) await sleep(100);
+  child.kill("SIGKILL");
+  await new Promise((resolve) => child.on("exit", resolve));
+  const all = rows(ledger);
+  assert.deepEqual(all.map((row) => [row.runId, row.stage, row.priced, row.usd, row.usage]), [["run-cut", "started", "reserve", 16.67, null]]);
+  assert.equal(ledgerSpend(all), 16.67);
 });

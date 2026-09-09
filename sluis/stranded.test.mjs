@@ -150,6 +150,9 @@ test("sweep moves a stranded issue to needs-human with a stop comment, through g
   assert.ok(calls.some((c) => /issue edit 8138 .*--remove-label trekvaart:building.*--add-label trekvaart:needs-human/.test(c)), calls.join("\n"));
   assert.ok(calls.some((c) => /issue comment 8138/.test(c)), calls.join("\n"));
   assert.match(r.stderr, /8138/);
+  // The marker has been read and acted on; leaving it would name a dead run forever
+  // (the strand of 2026-09-09 left 6.json behind after the sweep).
+  assert.equal(existsSync(join(markers, "8138.json")), false, "the acted-on marker is removed");
 });
 
 test("sweep leaves an issue with a live run alone", () => {
@@ -162,6 +165,7 @@ test("sweep leaves an issue with a live run alone", () => {
   const r = runCli(["sweep", "--repo", "o/r", "--markers", markers], { bin: gh.bin });
   assert.equal(r.status, 0, r.stderr);
   assert.ok(!gh.log().some((c) => /issue edit/.test(c)), gh.log().join("\n"));
+  assert.equal(existsSync(join(markers, "8138.json")), true, "a live run's marker stays");
 });
 
 test("sweep --dry-run prints the actions and writes nothing", () => {
@@ -173,6 +177,16 @@ test("sweep --dry-run prints the actions and writes nothing", () => {
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /8138.*trekvaart:building.*trekvaart:needs-human/);
   assert.ok(!gh.log().some((c) => /issue edit|issue comment/.test(c)));
+});
+
+test("sweep removes a dead marker whose issue is no longer in flight: the flight ended and the marker is spent", () => {
+  const dir = mkdtempSync(join(tmpdir(), "stranded-"));
+  const gh = fakeGh(dir, { issues: [] });
+  const markers = join(dir, "active");
+  marker(markers, { issue: 8138, pid: 999999 });
+  const r = runCli(["sweep", "--repo", "o/r", "--markers", markers], { bin: gh.bin });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(existsSync(join(markers, "8138.json")), false);
 });
 
 test("sweep refuses to run without --repo, and a gh failure is an error, not an empty sweep", () => {
