@@ -129,3 +129,24 @@ test("a prompt that names no issue still runs, prices, and repairs nothing", () 
   assert.ok(!f.ghCalls().some((c) => /issue/.test(c)));
   assert.ok(existsSync(join(f.dir, "ledger.jsonl")), "the ledger row is still written");
 });
+
+test("the issue comes from the work request, not from the first URL in the rendered prompt", () => {
+  // The foreman prompt's own header links its upstream and the adoption issue before the
+  // <prompt> block. The first flight on the box keyed its marker and its exit repair on that
+  // header link (#11866 in the product repo) instead of the issue Machinist rendered.
+  const f = fixture({ agentExit: 3, viewLabels: ["trekvaart:building"] });
+  const prompt = [
+    "# Foreman",
+    "> Adopted by decision A of the pilot (https://github.com/Indemnia/indemnia/issues/11866).",
+    "",
+    "<prompt>",
+    "Complete https://github.com/o/r/issues/8138",
+    "</prompt>",
+  ].join("\n");
+  const r = runWrapper(f, { prompt, runId: "run_hdr" });
+  assert.equal(r.status, 3);
+  assert.match(f.agent(), /^MARKERS=8138\.json ?$/m);
+  const calls = f.ghCalls();
+  assert.ok(!calls.some((c) => /11866/.test(c)), "the header's issue must never be touched:\n" + calls.join("\n"));
+  assert.ok(calls.some((c) => /issue edit 8138 .*--add-label trekvaart:needs-human/.test(c)), calls.join("\n"));
+});
