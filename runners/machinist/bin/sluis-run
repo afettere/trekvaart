@@ -75,7 +75,13 @@ if [[ -z "$issue_url" ]]; then
   issue_url="$(sed -n '/<prompt>/,/<\/prompt>/p' "$prompt_file" | grep -oE "$issue_re" | head -n 1 || true)"
 fi
 issue_number=""
-if [[ -n "$issue_url" ]]; then issue_number="${issue_url##*/}"; fi
+issue_repo=""
+if [[ -n "$issue_url" ]]; then
+  issue_number="${issue_url##*/}"
+  issue_repo="$(printf '%s' "$issue_url" | sed -E 's#https://github\.com/([^/]+/[^/]+)/issues/[0-9]+#\1#')"
+fi
+record_args=()
+if [[ -n "$issue_number" ]]; then record_args=(--issue "$issue_number" --repo "$issue_repo"); fi
 
 marker=""
 if [[ -n "$issue_number" ]]; then
@@ -97,7 +103,7 @@ while true; do
   if [[ "$resumes" -gt 0 ]]; then this_run="${run_id}-r${resumes}"; fi
 
   set +e
-  MACHINIST_RUN_ID="$this_run" "$@" < "$prompt_file" | node "$sluis" record --run-id "$this_run" --model "$model" "${ceiling_args[@]}"
+  MACHINIST_RUN_ID="$this_run" "$@" < "$prompt_file" | node "$sluis" record --run-id "$this_run" --model "$model" "${record_args[@]}" "${ceiling_args[@]}"
   status=("${PIPESTATUS[@]}")
   set -e
 

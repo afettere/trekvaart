@@ -239,7 +239,7 @@ function appendLedger(path, row) {
 
 // ---- CLI
 
-const KNOWN_FLAGS = new Set(["--config", "--ledger", "--run-id", "--model"]);
+const KNOWN_FLAGS = new Set(["--config", "--ledger", "--run-id", "--model", "--issue", "--repo"]);
 
 function parseArgs(argv) {
   const [command, ...rest] = argv;
@@ -286,6 +286,14 @@ async function record(flags) {
   if (!model) throw new Error("--model is required");
   const prices = ceiling.pricesUsdPerMillion[model];
   if (!prices) throw new Error(`model ${model} has no price row in the ceiling; refusing to record an unpriced run`);
+  // The issue and repository the wrapper read from the prompt, on every row: a run's marker
+  // names its issue only while the run is alive, and the board joins runs to flights afterwards.
+  let issue = null;
+  if (flags.issue !== undefined) {
+    issue = Number(flags.issue);
+    if (!Number.isInteger(issue) || issue < 1) throw new Error(`--issue must be a positive integer, got ${flags.issue}`);
+  }
+  const repo = flags.repo ?? null;
 
   // Pass every line through as it arrives so the runner's own collector sees the live
   // Stream the agent's output through unchanged. Every result event carries the session's
@@ -314,6 +322,8 @@ async function record(flags) {
       usd: usd ?? reserveCharge(ceiling),
       priced: usd === null ? "reserve" : "list",
       priceBasis: ceiling.priceBasis,
+      ...(issue === null ? {} : { issue }),
+      ...(repo === null ? {} : { repo }),
     };
   };
   // A result event arrives only at the END of a print-mode session, so a run the runner kills
@@ -344,7 +354,7 @@ async function main(argv) {
   const { command, flags } = parseArgs(argv);
   if (command === "check") return check(flags);
   if (command === "record") return record(flags);
-  throw new Error(`usage: spend-ceiling.mjs check|record [--config path] [--ledger path] [--run-id id] [--model model]`);
+  throw new Error(`usage: spend-ceiling.mjs check|record [--config path] [--ledger path] [--run-id id] [--model model] [--issue N --repo OWNER/REPO]`);
 }
 
 const invokedDirectly = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);

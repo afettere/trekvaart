@@ -4,7 +4,7 @@
 // issue is invisible to it, and it is invisible to a human's filter too. Two pilot runs ended
 // that way: one killed by the runner at its timeout, one that exited on its own.
 //
-//   sweep   --repo OWNER/REPO [--markers DIR] [--grace-minutes N] [--dry-run]
+//   sweep   --repo OWNER/REPO [--markers DIR] [--ticks DIR] [--grace-minutes N] [--dry-run]
 //           Every issue carrying planning, building or verifying with no live run for it is
 //           moved to needs-human with a stop comment. Meant to run from the runner's own cron
 //           trigger, since a kill takes the whole process group and nothing inside it can do
@@ -19,7 +19,7 @@
 // Liveness is a marker file per issue in the markers directory, written by the wrapper before
 // the agent starts and removed when it exits; a marker whose pid is dead is a killed run.
 // The sweeper never sets `requested`: only a human re-admits a flight.
-import { readFileSync, readdirSync, existsSync, rmSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -30,6 +30,7 @@ export const STOP_LABEL = "trekvaart:needs-human";
 export const STOP_MARKER = "<!-- trekvaart:stop -->";
 export const PR_MARKER = "<!-- trekvaart:foreman-pr -->";
 export const DEFAULT_MARKERS_DIR = "~/.trekvaart/active";
+export const DEFAULT_TICKS_DIR = "~/.trekvaart/ticks";
 export const DEFAULT_GRACE_MINUTES = 5;
 
 // ---- the decision
@@ -214,9 +215,16 @@ function removeSpentMarkers(active, issues, actions) {
   }
 }
 
+// The tick file: one JSON document per repository, overwritten each sweep, so the board (or a
+// human) reads the last tick from a file the runtime user owns instead of the root-only journal.
+function recordTick(dir, tick) {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${tick.repo.replace("/", "__")}.json`), JSON.stringify(tick) + "\n");
+}
+
 // ---- CLI
 
-const KNOWN_FLAGS = new Set(["--repo", "--markers", "--grace-minutes", "--issue", "--exit", "--run-id", "--resume-budget", "--resumed"]);
+const KNOWN_FLAGS = new Set(["--repo", "--markers", "--ticks", "--grace-minutes", "--issue", "--exit", "--run-id", "--resume-budget", "--resumed"]);
 const KNOWN_SWITCHES = new Set(["--dry-run"]);
 
 function parseArgs(argv) {
@@ -243,13 +251,20 @@ function sweep(flags) {
   const graceMinutes = flags["grace-minutes"] === undefined ? DEFAULT_GRACE_MINUTES : Number(flags["grace-minutes"]);
   const issues = listInFlightIssues(flags.repo);
   const active = readMarkers(markers);
-  const actions = strandedFlights({ issues, active, now: new Date(), graceMinutes });
+  const now = new Date();
+  const actions = strandedFlights({ issues, active, now, graceMinutes });
   const dryRun = flags["dry-run"] === true;
+  let line = `stranded: ${issues.length} in-flight issue(s), none stranded`;
   if (actions.length === 0) {
-    process.stderr.write(`stranded: ${issues.length} in-flight issue(s), none stranded\n`);
+    process.stderr.write(line + "\n");
+  } else {
+    line = `stranded: moved ${actions.map((a) => `#${a.issue}`).join(", ")} to ${STOP_LABEL}`;
   }
   for (const action of actions) applyAction(flags.repo, action, { dryRun });
-  if (!dryRun) removeSpentMarkers(active, issues, actions);
+  if (!dryRun) {
+    removeSpentMarkers(active, issues, actions);
+    recordTick(resolve(expandHome(flags.ticks ?? DEFAULT_TICKS_DIR)), { repo: flags.repo, at: now.toISOString(), line, inFlight: issues.length, moved: actions.length });
+  }
   return 0;
 }
 

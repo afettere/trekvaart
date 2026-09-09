@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trekvaart board</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+  :root {
+    --bg: #F4F5F1; --surface: #FFFFFF; --border: #D9DED9; --ink: #17221F; --muted: #5C6A65; --faint: #8B9793;
+    --accent: #1F5F6B; --accent-ink: #174A54; --human: #A8531B; --human-bg: #F7E8DC; --good: #2E7D5B; --good-bg: #E1F0E8;
+    --queued: #8C6A1E; --queued-bg: #F4EBD3; --track: #DDE3E0;
+    --font-ui: "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0F1614; --surface: #161F1C; --border: #2C3935; --ink: #E6ECE9; --muted: #9AA8A2; --faint: #6E7C77;
+      --accent: #5FB3C1; --accent-ink: #8FD0DA; --human: #E39A64; --human-bg: #3A2415; --good: #6CC49B; --good-bg: #16312A;
+      --queued: #D9B45A; --queued-bg: #352B12; --track: #26322E;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-ui); font-size: 15px; line-height: 1.5; padding-block: 28px 64px; padding-inline: 20px; }
+  a { color: var(--accent-ink); text-decoration: none; }
+  a:hover, a:focus-visible { text-decoration: underline; }
+  a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .page { max-width: 1080px; margin: 0 auto; display: grid; gap: 28px; }
+  .page > * { min-width: 0; }
+  .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 24px; }
+  header h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
+  header h1 span { color: var(--muted); font-weight: 400; }
+  .read { color: var(--muted); font-size: 13px; }
+  .read b { color: var(--ink); font-weight: 400; }
+  section h2 { margin: 0 0 10px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); display: flex; align-items: baseline; gap: 10px; }
+  section h2 .count { font-family: var(--font-mono); font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--faint); }
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+  .attn-row { display: grid; grid-template-columns: 6px 1fr auto; gap: 0 16px; align-items: start; padding: 14px 16px 14px 0; border-top: 1px solid var(--border); }
+  .attn-row:first-child { border-top: 0; }
+  .attn-row .stripe { align-self: stretch; background: var(--human); border-radius: 0 3px 3px 0; }
+  .attn-row .what { display: grid; gap: 2px; }
+  .attn-row .head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; }
+  .attn-row .quote { color: var(--muted); font-size: 14px; }
+  .attn-row .when { color: var(--muted); font-size: 13px; white-space: nowrap; text-align: right; }
+  .empty { padding: 14px 16px; color: var(--muted); }
+  .chip { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 12px; line-height: 1; padding: 5px 9px; border-radius: 999px; border: 1px solid transparent; white-space: nowrap; }
+  .chip.flight { color: var(--accent-ink); border-color: var(--accent); }
+  .chip.final-good { color: var(--good); background: var(--good-bg); }
+  .chip.human { color: var(--human); background: var(--human-bg); }
+  .chip.queued { color: var(--queued); background: var(--queued-bg); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .dot.live { box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 22%, transparent); }
+  .tablewrap { overflow-x: auto; max-width: 100%; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 12px; font-weight: 700; color: var(--muted); letter-spacing: 0.04em; padding: 10px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td { padding: 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  td.num, th.num { text-align: right; }
+  td.runs { padding-top: 0; }
+  .title { display: grid; gap: 2px; }
+  .title .t { max-width: 46ch; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .timeline { display: grid; gap: 4px; min-width: 170px; }
+  .timeline .bar { height: 4px; background: var(--track); border-radius: 2px; overflow: hidden; }
+  .timeline .bar i { display: block; height: 100%; background: var(--accent); }
+  details summary { list-style: none; cursor: pointer; color: var(--muted); font-size: 13px; display: inline-flex; align-items: center; gap: 6px; }
+  details summary::-webkit-details-marker { display: none; }
+  details summary::before { content: ""; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); }
+  details[open] summary::before { transform: rotate(45deg); }
+  .runlist { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 4px; font-size: 13px; }
+  .runlist li { display: grid; grid-template-columns: minmax(180px, 1fr) auto auto; gap: 16px; color: var(--muted); }
+  .runlist li b { color: var(--ink); font-weight: 400; }
+  .spend { padding: 16px; display: grid; gap: 12px; }
+  .spend .figures { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 18px; }
+  .spend .big { font-family: var(--font-mono); font-size: 28px; font-weight: 600; letter-spacing: -0.01em; }
+  .spend .of { color: var(--muted); }
+  .spend .fits { margin-left: auto; color: var(--muted); }
+  .spend .fits b { color: var(--ink); font-weight: 700; }
+  .track { position: relative; height: 14px; background: var(--track); border-radius: 7px; overflow: hidden; }
+  .track .priced { position: absolute; inset: 0 auto 0 0; background: var(--accent); }
+  .track .reserve { position: absolute; inset: 0 auto 0 0; background: repeating-linear-gradient(135deg, var(--accent) 0 4px, transparent 4px 8px); opacity: .7; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); font-size: 13px; }
+  .legend i { display: inline-block; width: 12px; height: 8px; border-radius: 2px; vertical-align: middle; margin-right: 6px; background: var(--accent); }
+  .legend i.res { background: repeating-linear-gradient(135deg, var(--accent) 0 3px, transparent 3px 6px); }
+  .legend i.left { background: var(--track); }
+  .caption { color: var(--muted); font-size: 13px; }
+  .box { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+  .box > div { padding: 14px 16px; border-left: 1px solid var(--border); display: grid; gap: 6px; align-content: start; }
+  .box > div:first-child { border-left: 0; }
+  .box .k { font-size: 12px; font-weight: 700; color: var(--muted); letter-spacing: 0.04em; }
+  .box .v { display: grid; gap: 2px; }
+  .box .line { display: flex; justify-content: space-between; gap: 12px; }
+  .box .line span:first-child { white-space: nowrap; }
+  .box .line span:last-child { color: var(--muted); font-size: 13px; text-align: right; }
+  .ok { color: var(--good); }
+  .warn { color: var(--human); font-weight: 700; }
+  .source-error { padding: 12px 16px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 14px; }
+  .source-error b { color: var(--ink); font-weight: 400; }
+  @media (max-width: 720px) {
+    .attn-row { grid-template-columns: 6px 1fr; }
+    .attn-row .when { grid-column: 2; text-align: left; white-space: normal; }
+    .spend .fits { margin-left: 0; }
+    .box > div { border-left: 0; border-top: 1px solid var(--border); }
+    .box > div:first-child { border-top: 0; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <h1>Trekvaart <span>board</span></h1>
+    <div class="read" id="read">Reading the box…</div>
+  </header>
+  <section aria-labelledby="h-attn"><h2 id="h-attn">Waiting on you <span class="count" id="attn-count"></span></h2><div class="panel" id="attn"><div class="empty">Reading…</div></div></section>
+  <section aria-labelledby="h-flights"><h2 id="h-flights">Flights <span class="count" id="flights-count"></span></h2><div class="panel tablewrap" id="flights"><div class="empty">Reading…</div></div></section>
+  <section aria-labelledby="h-spend"><h2 id="h-spend">Spend, last <span id="window">30</span> days</h2><div class="panel spend" id="spend"><div class="empty">Reading…</div></div></section>
+  <section aria-labelledby="h-box"><h2 id="h-box">Sweeper and box</h2><div class="panel box" id="box"></div></section>
+</div>
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const money = (n) => "$" + Number(n).toFixed(2);
+  const fmt = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", timeZone: "America/Denver" });
+  const fmtDay = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", timeZone: "America/Denver" });
+  const when = (iso) => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    const sameDay = fmtDay.format(d) === fmtDay.format(new Date());
+    return (sameDay ? "" : fmtDay.format(d) + " ") + fmt.format(d) + " MT";
+  };
+  const duration = (min) => {
+    if (min === null || min === undefined) return "";
+    if (min < 60) return min + " min";
+    return Math.floor(min / 60) + " h " + (min % 60) + " min";
+  };
+  const chipClass = (label) =>
+    label === "trekvaart:ready-for-review" ? "final-good" : /needs-human|blocked/.test(label) ? "human" : /requested|queued/.test(label) ? "queued" : "flight";
+  const short = (label) => label.replace(/^trekvaart:|^machinist:/, "");
+
+  function sourceError(name, e) {
+    if (!e) return "";
+    return '<div class="source-error"><span class="warn">Could not read ' + esc(name) + '</span> (' + esc(e.message) + ' at ' + when(e.at) + '). ' +
+      (e.lastGoodAt ? 'Showing the last good read, <b>' + when(e.lastGoodAt) + '</b>.' : 'No good read yet.') + '</div>';
+  }
+
+  function renderAttention(v) {
+    const rows = v.attention;
+    $("attn-count").textContent = rows.length ? String(rows.length) : "";
+    let html = sourceError("labels from GitHub", v.errors.github);
+    if (!rows.length) {
+      html += '<div class="empty">Nothing is waiting on you.' + (v.lastSweepAt ? " Last sweep " + when(v.lastSweepAt) + "." : "") + "</div>";
+    }
+    for (const a of rows) {
+      html += '<div class="attn-row"><div class="stripe"></div><div class="what"><div class="head">' +
+        '<a class="mono" href="' + esc(a.url) + '" target="_blank" rel="noopener">' + esc(a.repoShort) + " #" + a.number + "</a> <span>" + esc(a.title) + '</span> <span class="chip ' + chipClass(a.label) + '">' + esc(short(a.label)) + "</span></div>" +
+        '<div class="quote">' + esc(a.quote) + "</div>" +
+        '<div class="sub"><a href="' + esc(a.commentUrl) + '" target="_blank" rel="noopener">Open #' + a.number + " →</a> " + esc(a.action) + "</div></div>" +
+        '<div class="when">' + (a.stoppedAt ? "stopped " + when(a.stoppedAt) : "") + "</div></div>";
+    }
+    $("attn").innerHTML = html;
+  }
+
+  function renderFlights(v) {
+    const rows = v.flights;
+    const running = rows.filter((f) => f.live).length;
+    $("flights-count").textContent = rows.length ? rows.length + " open · " + running + " running" : "";
+    let html = "";
+    if (!rows.length) {
+      html = sourceError("labels from GitHub", v.errors.github) + '<div class="empty">No flight in progress. Label an issue <span class="mono">trekvaart:requested</span> to start one.</div>';
+      $("flights").innerHTML = html;
+      return;
+    }
+    html += "<table><thead><tr><th>Issue</th><th>State</th><th>Time in state</th><th>Pull request</th><th class=\"num\">Spend so far</th></tr></thead><tbody>";
+    for (const f of rows) {
+      const live = f.live ? '<i class="dot live"></i>' : "";
+      const sinceLine = f.minutesInState === null ? "" :
+        '<div><span class="mono">' + duration(f.minutesInState) + "</span> " + (f.cls === "flight" ? '<span class="sub">of ' + f.timeoutMinutes + "</span>" : '<span class="sub">since ' + when(f.sinceAt) + (f.sinceIsApprox ? " (last update)" : "") + "</span>") + "</div>";
+      const bar = f.cls === "flight" && f.minutesInState !== null ? '<div class="bar"><i style="width:' + Math.min(100, Math.round((f.minutesInState / f.timeoutMinutes) * 100)) + '%"></i></div>' : "";
+      const note = f.live ? '<div class="sub">run alive, pid ' + f.pid + "</div>" :
+        f.cls === "flight" ? '<div class="sub"><span class="warn">' + esc(f.liveNote) + "</span>" + (f.sweeperActsAt ? "; the sweeper acts at " + when(f.sweeperActsAt) : "") + "</div>" :
+        f.cls === "final-good" ? '<div class="sub">waiting on your review</div>' : "";
+      const pr = f.pr ? '<a class="mono" href="' + esc(f.pr.url) + '" target="_blank" rel="noopener">#' + f.pr.number + "</a> " +
+        (f.pr.checks ? '<span class="sub">' + f.pr.checks.pass + " green" + (f.pr.checks.fail ? ", " + f.pr.checks.fail + " red" : "") + (f.pr.checks.pending ? ", " + f.pr.checks.pending + " running" : "") + "</span>" : "") +
+        (f.pr.state && f.pr.state !== "OPEN" ? ' <span class="sub">' + esc(f.pr.state.toLowerCase()) + "</span>" : "") : '<span class="sub">not yet opened</span>';
+      const spendNote = f.spend.kind === "none" ? "no run yet" : f.spend.kind === "reserve" ? "reserve, not yet priced" : f.spend.kind === "mixed" ? f.spend.runs + " runs, one at the reserve" : f.spend.runs + (f.spend.runs === 1 ? " run, priced" : " runs, priced");
+      html += "<tr><td><div class=\"title\"><div class=\"t\"><a class=\"mono\" href=\"" + esc(f.url) + "\" target=\"_blank\" rel=\"noopener\">" + esc(f.repoShort) + " #" + f.number + "</a> " + esc(f.title) + "</div>" +
+        '<div class="sub">' + (f.stage ? "stage " + esc(f.stage) : "no state comment yet") + (f.repairs !== null ? " · repairs " + f.repairs : "") + "</div></div></td>" +
+        '<td><span class="chip ' + f.cls + '">' + live + esc(short(f.label)) + "</span></td>" +
+        '<td><div class="timeline">' + sinceLine + bar + note + "</div></td>" +
+        "<td>" + pr + "</td>" +
+        '<td class="num"><div class="mono">' + (f.spend.kind === "none" ? "—" : money(f.spend.usd)) + '</div><div class="sub">' + spendNote + "</div></td></tr>";
+      if (f.runs.length) {
+        html += '<tr><td class="runs" colspan="5"><details><summary>' + f.runs.length + (f.runs.length === 1 ? " run" : " runs") + '</summary><ul class="runlist">';
+        for (const r of f.runs) {
+          html += "<li><b class=\"mono\">" + esc(r.runId) + "</b><span>" + when(r.startedAt) + (r.endedAt ? " → " + when(r.endedAt) : " · running") + '</span><span class="mono">' + money(r.usd) + (r.priced === "reserve" ? " reserve" : "") + "</span></li>";
+        }
+        html += "</ul></details></td></tr>";
+      }
+    }
+    html += "</tbody></table>";
+    $("flights").innerHTML = html;
+  }
+
+  function renderSpend(v) {
+    const s = v.spend;
+    $("window").textContent = s.windowDays;
+    let html = sourceError("the ledger", v.errors.ledger);
+    const pct = (n) => Math.min(100, (n / s.ceilingUsd) * 100).toFixed(1) + "%";
+    html += '<div class="figures"><span class="big">' + money(s.leftUsd) + '</span><span class="of">left of ' + money(s.ceilingUsd) + "</span>" +
+      '<span class="fits"><b>' + s.fits + "</b> flights fit at the " + money(s.reservePerFlight) + " reserve</span></div>" +
+      '<div class="track" role="img" aria-label="Spent ' + money(s.spentUsd) + ' of ' + money(s.ceilingUsd) + '"><div class="reserve" style="width:' + pct(s.pricedUsd + s.reserveUsd) + '"></div><div class="priced" style="width:' + pct(s.pricedUsd) + '"></div></div>' +
+      '<div class="legend"><span><i></i>priced ' + money(s.pricedUsd) + " · " + s.pricedRuns + (s.pricedRuns === 1 ? " run" : " runs") + "</span>" +
+      (s.reserveRuns ? "<span><i class=\"res\"></i>in flight, reserve " + money(s.reserveUsd) + " · " + s.reserveRuns + (s.reserveRuns === 1 ? " run" : " runs") + "</span>" : "") +
+      '<span><i class="left"></i>left ' + money(s.leftUsd) + "</span></div>" +
+      '<div class="caption">List-price shadow of the subscription allowance; the box holds no API key. Window ' + s.windowDays + " days, ceiling " + money(s.ceilingUsd) + ", reserve " + money(s.ceilingUsd) + " ÷ " + Math.round(s.ceilingUsd / s.reservePerFlight) + ". The next flight is refused once the window is spent.</div>";
+    $("spend").innerHTML = html;
+  }
+
+  function renderBox(v) {
+    const b = v.box || {};
+    const sweeps = v.sweeper.map((s) =>
+      '<div class="line"><span class="' + (s.stale ? "warn" : "ok") + '">' + esc(s.repoShort) + (s.at ? " · " + when(s.at) : "") + "</span><span>" + esc(s.note || (s.line || "").replace(/^stranded: /, "").replace("issue(s)", "in flight")) + "</span></div>").join("");
+    const cp = b.controlPlane ? '<div class="line"><span class="' + (b.controlPlane.up ? "ok" : "warn") + '">control plane ' + (b.controlPlane.up ? "up" : "not answering") + "</span><span>" + esc(b.controlPlane.listen) + (b.machinistVersion ? " · " + esc(b.machinistVersion) : "") + "</span></div>" : "";
+    $("box").innerHTML =
+      '<div><div class="k">SWEEPER</div><div class="v">' + sweeps + (b.sweepMinutes ? '<div class="line"><span>cadence</span><span>every ' + b.sweepMinutes + " min</span></div>" : "") + "</div></div>" +
+      '<div><div class="k">MACHINIST</div><div class="v">' + cp + '<div class="line"><span>foreman timeout</span><span>' + (b.timeoutMinutes || "?") + " min</span></div>" + '<div class="line"><span>poll</span><span>every ' + (b.pollMinutes || "?") + " min</span></div></div></div>" +
+      '<div><div class="k">LOGINS AND VERSIONS</div><div class="v">' +
+      '<div class="line"><span>GitHub</span><span>' + esc(b.gh || "not logged in") + "</span></div>" +
+      '<div class="line"><span>Trekvaart</span><span class="mono">' + esc(b.trekvaart || "?") + "</span></div>" +
+      '<div class="line"><span>Node for flights</span><span class="mono">' + esc(b.node || "?") + "</span></div></div></div>";
+  }
+
+  async function refresh() {
+    try {
+      const res = await fetch("/api/board", { cache: "no-store" });
+      if (!res.ok) throw new Error("board answered " + res.status);
+      const v = await res.json();
+      renderAttention(v);
+      renderFlights(v);
+      renderSpend(v);
+      renderBox(v);
+      $("read").innerHTML = "Read on the box at <b>" + when(v.readAt) + "</b> · refreshes every 60 s";
+    } catch (err) {
+      $("read").innerHTML = '<span class="warn">Could not reach the board server</span> (' + esc(err.message) + "). Showing the last read.";
+    }
+  }
+  refresh();
+  setInterval(refresh, 60_000);
+})();
+</script>
+</body>
+</html>

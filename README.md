@@ -52,8 +52,11 @@ sluis/
   stranded.mjs           the stranded-flight sweeper and the wrapper's label repair
 runners/
   machinist/             config, worker, executor wrapper and sweeper command for Machinist
+board/
+  compose.mjs            the board's composer: labels, ledger, markers and ticks in, the page's view out
+  server.mjs             the board: one read-only page on 127.0.0.1:7332 beside Machinist's UI
 install/
-  bootstrap.sh           the box: Machinist pinned, herdr, this repo cloned, firewall applied
+  bootstrap.sh           the box: Machinist pinned, herdr, Node 24, the board, this repo cloned, firewall applied
 ```
 
 ## What Trekvaart is not

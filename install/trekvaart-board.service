@@ -1,0 +1,23 @@
+# The Trekvaart board as a user service for the runtime user. Installed by the bootstrap at
+# ~/.config/systemd/user/trekvaart-board.service; `loginctl enable-linger machinist` keeps
+# user services up without a login session.
+#
+#   systemctl --user enable --now trekvaart-board.service
+#   systemctl --user status trekvaart-board.service
+#   journalctl --user -u trekvaart-board.service -f
+#
+# Localhost only, like Machinist's UI: reach it over the SSH tunnel (install/README.md).
+[Unit]
+Description=Trekvaart board (read-only, 127.0.0.1:7332)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/trekvaart
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/.local/bin/node %h/trekvaart/board/server.mjs --listen 127.0.0.1:7332 --refresh-seconds 60
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
