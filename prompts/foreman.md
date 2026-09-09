@@ -229,7 +229,9 @@ expected inventory in two polls at least 30 seconds apart. New observed results 
 inventory and restart stabilization; missing expected results remain pending. Then wait
 for every expected check and reviewer to finish. Poll no more often than every 30 seconds
 and allow at most `AUTOMATION_GATE_MINUTES` (see Configuration) for registration and
-completion together.
+completion together. Never end the run while an expected check or reviewer is pending and
+the deadline has not passed: sleep and poll again. Ending the run here leaves the issue at
+`trekvaart:verifying` with no one holding the gate.
 
 Read failed checks, reviews, current threads, and bot comments. Compare each finding with
 the current remote head and diff. Ignore resolved, historical, or stale findings. Send a

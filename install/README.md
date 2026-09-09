@@ -88,6 +88,17 @@ herdr                        # starts the background server if it is not running
 
 herdr's README documents no systemd unit for its server; the server starts with the first client and stays up. If that changes, add a user unit here. herdr is not in the flight path: Machinist runs flights, and nothing in `~/.machinist` refers to it.
 
+## Node for flights
+
+The distro's Node 18 runs the sluis and the sweeper, but it carries no npm, so a flight could not run the product's `npm run verify` in its worktree: the first product flight shipped "not runnable locally; CI is the proof". The bootstrap installs Node 24 for the `machinist` user with [fnm](https://github.com/Schniz/fnm) and links `node`, `npm` and `npx` into `~/.local/bin`; the executor wrapper puts that directory first on PATH. A box bootstrapped before this step exists gets it by hand:
+
+```bash
+curl -fsSL https://fnm.vercel.app/install | bash -s -- --skip-shell
+~/.local/share/fnm/fnm install 24
+for t in node npm npx; do ln -sfn "$(~/.local/share/fnm/fnm exec --using 24 -- sh -c "command -v $t")" ~/.local/bin/$t; done
+exec bash -l && node --version && npm --version
+```
+
 ## Smoke test, before any real issue
 
 Two steps, both against a **throwaway repository** the `gh` account can write to, never the product.

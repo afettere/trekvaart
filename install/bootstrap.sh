@@ -91,6 +91,24 @@ if ! run_as_runtime bash -lc 'command -v herdr' >/dev/null 2>&1; then
 fi
 run_as_runtime bash -lc 'herdr --version' || echo "   herdr did not install; the box works without it (see install/README.md, herdr)"
 
+echo "== 5b. Node 24 for the runtime user, via fnm"
+# The distro's nodejs (step 2) runs the sluis and the sweeper and is enough for them, but it is
+# Node 18 with no npm, so a flight could not run the product's own check chain in its worktree
+# (the first product flight, 2026-09-09, shipped "not runnable locally; CI is the proof").
+# fnm installs Node 24 for the runtime user; the three binaries are linked into ~/.local/bin,
+# which the executor wrapper puts first on PATH.
+FNM="${RUNTIME_HOME}/.local/share/fnm/fnm"
+if [[ ! -x "${FNM}" ]]; then
+  run_as_runtime bash -lc 'curl -fsSL https://fnm.vercel.app/install | bash -s -- --skip-shell'
+fi
+run_as_runtime "${FNM}" install 24
+run_as_runtime mkdir -p "${RUNTIME_HOME}/.local/bin"
+for tool in node npm npx; do
+  target="$(run_as_runtime "${FNM}" exec --using 24 -- sh -c "command -v ${tool}")"
+  run_as_runtime ln -sfn "${target}" "${RUNTIME_HOME}/.local/bin/${tool}"
+done
+run_as_runtime bash -lc 'echo "   node $(node --version), npm $(npm --version) for the runtime user"'
+
 echo "== 6. Firewall"
 bash "${RUNTIME_HOME}/trekvaart/install/firewall.sh"
 

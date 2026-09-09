@@ -56,6 +56,11 @@ node "$sluis" check "${ceiling_args[@]}"
 # The CLI's background-task ceiling, off (see 2 above).
 export CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0
 
+# The runtime user's own tools first: the bootstrap installs Node 24 (with npm) under
+# ~/.local/bin because the distro's Node is 18 and carries no npm, and the worker's PATH
+# puts the distro first. Without this a flight cannot run `npm run verify` in its worktree.
+if [[ -d "${HOME}/.local/bin" ]]; then export PATH="${HOME}/.local/bin:${PATH}"; fi
+
 # The prompt arrives on stdin and is passed to the agent unchanged; a copy is read for the
 # issue URL Machinist renders ("Complete https://github.com/OWNER/REPO/issues/N"). That
 # line is the work request; the rest of the rendered prompt is the foreman text, whose own
