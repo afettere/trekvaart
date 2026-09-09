@@ -14,8 +14,12 @@
 #    marker cleanup included, which is exactly what the sweeper looks for).
 # 4. Runs the agent with the prompt on stdin and tees its stream through `record`, which
 #    appends a provisional priced row at every result event and a final row at exit.
-# 5. On the agent's own exit, repairs a stranded label: if the issue still carries planning,
-#    building or verifying, it moves to needs-human with a stop comment naming the exit.
+# 5. On the agent's own exit, asks the sweeper for a verdict. An exit 0 with the issue at
+#    verifying and the foreman's PR comment posted is a turn that ended inside the automation
+#    gate (the first product flight left two minutes into a 50-minute CI wait): the agent is
+#    run again with the same prompt, up to MAX_RESUMES times, each resume priced as its own
+#    run. Anything else still in flight is a strand: the label moves to needs-human with a
+#    stop comment naming the exit.
 # The agent's own exit code is the wrapper's exit code.
 set -euo pipefail
 
@@ -44,7 +48,8 @@ if [[ -z "$model" ]]; then
   exit 64
 fi
 
-run_id="${MACHINIST_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+run_id="${MACHINIST_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$}"
+MAX_RESUMES=3
 
 node "$sluis" check "${ceiling_args[@]}"
 
@@ -81,24 +86,34 @@ cleanup() {
 }
 trap cleanup EXIT
 
-set +e
-"$@" < "$prompt_file" | node "$sluis" record --run-id "$run_id" --model "$model" "${ceiling_args[@]}"
-status=("${PIPESTATUS[@]}")
-set -e
+resumes=0
+while true; do
+  this_run="$run_id"
+  if [[ "$resumes" -gt 0 ]]; then this_run="${run_id}-r${resumes}"; fi
 
-agent_status="${status[0]}"
-record_status="${status[1]}"
+  set +e
+  MACHINIST_RUN_ID="$this_run" "$@" < "$prompt_file" | node "$sluis" record --run-id "$this_run" --model "$model" "${ceiling_args[@]}"
+  status=("${PIPESTATUS[@]}")
+  set -e
 
-# The agent has exited on its own (a kill never reaches this line). If the issue is still
-# in flight, the flight ended without posting: make that visible.
-if [[ -n "$issue_url" ]]; then
-  if ! node "$stranded" repair --issue "$issue_url" --exit "$agent_status" --run-id "$run_id"; then
-    echo "sluis-run: the stranded-label repair failed; the sweeper will retry on its next tick" >&2
+  agent_status="${status[0]}"
+  record_status="${status[1]}"
+
+  if [[ "$record_status" -ne 0 ]]; then
+    echo "sluis-run: the ledger row was not written (record exited ${record_status})" >&2
+    exit "$record_status"
   fi
-fi
 
-if [[ "$record_status" -ne 0 ]]; then
-  echo "sluis-run: the ledger row was not written (record exited ${record_status})" >&2
-  exit "$record_status"
-fi
+  # The agent has exited on its own (a kill never reaches this line). Ask what that means.
+  if [[ -z "$issue_url" ]]; then break; fi
+  verdict="$(node "$stranded" repair --issue "$issue_url" --exit "$agent_status" --run-id "$this_run" \
+    --resume-budget "$((MAX_RESUMES - resumes))" --resumed "$resumes")" || {
+    echo "sluis-run: the stranded-label repair failed; the sweeper will retry on its next tick" >&2
+    break
+  }
+  if [[ "$verdict" != "resume" ]]; then break; fi
+  resumes=$((resumes + 1))
+  echo "sluis-run: resuming the agent for ${issue_url} (resume ${resumes} of ${MAX_RESUMES})" >&2
+done
+
 exit "$agent_status"

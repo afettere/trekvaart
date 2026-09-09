@@ -49,7 +49,7 @@ esac
     join(bin, "fake-agent"),
     `#!/usr/bin/env bash
 prompt="$(cat)"
-printf 'BG=%s\\nMARKERS=%s\\nPROMPT=%s\\n' "\${CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS:-unset}" "$(ls "\${TREKVAART_ACTIVE_DIR}" 2>/dev/null | tr '\\n' ' ')" "$prompt" > "${agentLog}"
+printf 'BG=%s\\nMARKERS=%s\\nPATH=%s\\nPROMPT=%s\\n' "\${CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS:-unset}" "$(ls "\${TREKVAART_ACTIVE_DIR}" 2>/dev/null | tr '\\n' ' ')" "$PATH" "$prompt" > "${agentLog}"
 printf '%s\\n' "\${MACHINIST_RUN_ID:-}" >> "${runsLog}"
 runs="$(wc -l < "${runsLog}")"
 if [[ ${readyAfterRuns} -gt 0 && "$runs" -ge ${readyAfterRuns} ]]; then printf '%s' '["trekvaart:ready-for-review"]' > "${labelsFile}"; fi
@@ -75,12 +75,13 @@ exit ${agentExit}
   };
 }
 
-function runWrapper(f, { prompt = "Complete https://github.com/o/r/issues/8138", runId = "run_t" } = {}) {
+function runWrapper(f, { prompt = "Complete https://github.com/o/r/issues/8138", runId = "run_t", env = {} } = {}) {
   return spawnSync("bash", [wrapper, "fake-agent", "--model=claude-opus-5"], {
     input: prompt,
     encoding: "utf8",
     env: {
       ...process.env,
+      ...env,
       PATH: `${f.bin}:${process.env.PATH}`,
       MACHINIST_RUN_ID: runId,
       TREKVAART_CEILING: f.config,
@@ -216,4 +217,18 @@ test("an exit 0 at building is not a gate exit: repaired, not resumed", () => {
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(f.runs(), ["run_bld"]);
   assert.ok(f.ghCalls().some((c) => /--remove-label trekvaart:building.*--add-label trekvaart:needs-human/.test(c)));
+});
+
+// ---- the runtime user's own tools first. The box's distro Node is 18 and carries no npm; the
+// bootstrap installs Node 24 for the runtime user under ~/.local/bin, and the worker's PATH
+// order is the distro's. The wrapper puts ~/.local/bin first so a flight's `node`, `npm` and
+// `npx` are the runtime user's, and `npm run verify` can run in a worktree at all.
+
+test("the agent sees ~/.local/bin first on PATH when it exists", () => {
+  const f = fixture();
+  mkdirSync(join(f.dir, ".local", "bin"), { recursive: true });
+  const r = runWrapper(f, { env: { HOME: f.dir } });
+  assert.equal(r.status, 0, r.stderr);
+  const path = /^PATH=(.*)$/m.exec(f.agent())?.[1] ?? "";
+  assert.equal(path.split(":")[0], join(f.dir, ".local", "bin"), path);
 });

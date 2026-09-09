@@ -9,9 +9,12 @@
 //           moved to needs-human with a stop comment. Meant to run from the runner's own cron
 //           trigger, since a kill takes the whole process group and nothing inside it can do
 //           this afterwards.
-//   repair  --issue URL --exit CODE --run-id ID
-//           One issue, on the executor wrapper's behalf at the agent's own exit: if the issue
-//           still carries an in-flight label, swap it for needs-human and comment.
+//   repair  --issue URL --exit CODE --run-id ID [--resume-budget N --resumed N]
+//           One issue, on the executor wrapper's behalf at the agent's own exit. Prints one
+//           word on stdout: "none" (terminal label, nothing to do), "resume" (exit 0 at
+//           verifying with the foreman's PR comment posted and budget left: the agent ended
+//           its turn inside the automation gate, run it again), or "repaired" (the in-flight
+//           label was swapped for needs-human with a stop comment).
 //
 // Liveness is a marker file per issue in the markers directory, written by the wrapper before
 // the agent starts and removed when it exits; a marker whose pid is dead is a killed run.
@@ -25,6 +28,7 @@ import { spawnSync } from "node:child_process";
 export const IN_FLIGHT_LABELS = new Set(["trekvaart:planning", "trekvaart:building", "trekvaart:verifying"]);
 export const STOP_LABEL = "trekvaart:needs-human";
 export const STOP_MARKER = "<!-- trekvaart:stop -->";
+export const PR_MARKER = "<!-- trekvaart:foreman-pr -->";
 export const DEFAULT_MARKERS_DIR = "~/.trekvaart/active";
 export const DEFAULT_GRACE_MINUTES = 5;
 
@@ -95,6 +99,23 @@ export function parseIssueUrl(text) {
   const m = ISSUE_URL.exec(text);
   if (!m) return null;
   return { owner: m[1], repo: m[2], number: Number(m[3]), url: m[0] };
+}
+
+/**
+ * What the wrapper does when the agent exits on its own.
+ *
+ * "resume" only for the one shape measured on the first product flight: exit 0, the issue at
+ * `verifying`, the foreman's PR comment already posted, budget left. That is a turn ending
+ * inside the automation gate, and the foreman's resume path picks the gate back up. Anything
+ * else in flight is a strand ("repair"); a terminal label is "none".
+ */
+export function exitVerdict({ exitCode, from, hasPr, resumesLeft }) {
+  if (typeof hasPr !== "boolean") throw new TypeError("hasPr must be a boolean");
+  if (!Number.isInteger(resumesLeft) || resumesLeft < 0) throw new RangeError("resumesLeft must be a non-negative integer");
+  if (from === null || from === undefined) return "none";
+  if (typeof from !== "string") throw new TypeError("from must be a label or null");
+  if (exitCode === 0 && from === "trekvaart:verifying" && hasPr && resumesLeft > 0) return "resume";
+  return "repair";
 }
 
 export function stopComment({ from, reason, runId }) {
@@ -195,7 +216,7 @@ function removeSpentMarkers(active, issues, actions) {
 
 // ---- CLI
 
-const KNOWN_FLAGS = new Set(["--repo", "--markers", "--grace-minutes", "--issue", "--exit", "--run-id"]);
+const KNOWN_FLAGS = new Set(["--repo", "--markers", "--grace-minutes", "--issue", "--exit", "--run-id", "--resume-budget", "--resumed"]);
 const KNOWN_SWITCHES = new Set(["--dry-run"]);
 
 function parseArgs(argv) {
@@ -237,21 +258,31 @@ function repair(flags) {
   const issue = parseIssueUrl(flags.issue);
   if (!issue) throw new Error(`--issue must be a GitHub issue URL, got ${flags.issue}`);
   const exitCode = flags.exit === undefined ? null : Number(flags.exit);
+  const resumesLeft = flags["resume-budget"] === undefined ? 0 : Number(flags["resume-budget"]);
+  const resumed = flags.resumed === undefined ? 0 : Number(flags.resumed);
   const repo = `${issue.owner}/${issue.repo}`;
-  const view = ghJson(["issue", "view", String(issue.number), "--repo", repo, "--json", "labels"]);
+  const view = ghJson(["issue", "view", String(issue.number), "--repo", repo, "--json", "labels,comments"]);
   const from = inFlightLabel({ number: issue.number, labels: Array.isArray(view.labels) ? view.labels : [] });
-  if (!from) {
+  const comments = Array.isArray(view.comments) ? view.comments : [];
+  const hasPr = comments.some((c) => c && typeof c.body === "string" && c.body.includes(PR_MARKER));
+  const verdict = exitVerdict({ exitCode, from, hasPr, resumesLeft });
+  if (verdict === "none") {
     process.stderr.write(`stranded: #${issue.number} is not in flight; nothing to repair\n`);
+    process.stdout.write("none\n");
     return 0;
   }
-  const action = {
-    issue: issue.number,
-    from,
-    to: STOP_LABEL,
-    reason: `the agent exited ${exitCode ?? "(code unknown)"} with nothing posted`,
-    runId: flags["run-id"] ?? null,
-  };
+  if (verdict === "resume") {
+    process.stderr.write(`stranded: #${issue.number} exited 0 inside the automation gate with its PR posted; resuming (${resumesLeft} left)\n`);
+    process.stdout.write("resume\n");
+    return 0;
+  }
+  const gateExit = exitCode === 0 && from === "trekvaart:verifying" && hasPr;
+  const reason = gateExit
+    ? `the agent exited 0 inside the automation gate after ${resumed} resume(s) without reaching a terminal label`
+    : `the agent exited ${exitCode ?? "(code unknown)"} with nothing posted`;
+  const action = { issue: issue.number, from, to: STOP_LABEL, reason, runId: flags["run-id"] ?? null };
   applyAction(repo, action, { dryRun: false });
+  process.stdout.write("repaired\n");
   return 0;
 }
 
@@ -259,7 +290,7 @@ async function main(argv) {
   const { command, flags } = parseArgs(argv);
   if (command === "sweep") return sweep(flags);
   if (command === "repair") return repair(flags);
-  throw new Error("usage: stranded.mjs sweep --repo OWNER/REPO [--markers DIR] [--grace-minutes N] [--dry-run] | repair --issue URL --exit CODE --run-id ID");
+  throw new Error("usage: stranded.mjs sweep --repo OWNER/REPO [--markers DIR] [--grace-minutes N] [--dry-run] | repair --issue URL --exit CODE --run-id ID [--resume-budget N --resumed N]");
 }
 
 const invokedDirectly = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
